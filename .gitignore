@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local runtime state. The example file is the template.
+patience_state.json
+trigger_queue.jsonl
