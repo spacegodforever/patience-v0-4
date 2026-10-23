@@ -1,9 +1,4 @@
-$ErrorActionPreference = "Stop"
-
-if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-    Write-Host "Python was not found on PATH."
-    exit 1
-}
-
-python -m pip install -r requirements.txt
-python -m streamlit run dashboard.py
+$ErrorActionPreference = 'Stop'
+Set-Location -LiteralPath $PSScriptRoot
+& '.\.venv\Scripts\python.exe' -m streamlit run dashboard.py
+if ($LASTEXITCODE -ne 0) { throw 'Dashboard exited with an error.' }

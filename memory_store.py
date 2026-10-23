@@ -1,4 +1,6 @@
 import json
+import os
+import tempfile
 from pathlib import Path
 from dataclasses import asdict
 from models import PatienceState, now_iso
@@ -9,7 +11,16 @@ class MemoryStore:
 
     def save(self, state: PatienceState) -> None:
         state.last_updated = now_iso()
-        self.path.write_text(json.dumps(asdict(state), indent=2), encoding="utf-8")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle, temporary = tempfile.mkstemp(dir=self.path.parent, suffix='.tmp')
+        try:
+            with os.fdopen(handle, 'w', encoding='utf-8') as stream:
+                json.dump(asdict(state), stream, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
 
     def load(self) -> PatienceState:
         if not self.path.exists():
