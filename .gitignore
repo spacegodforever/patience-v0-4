@@ -1,8 +1,13 @@
 .venv/
 __pycache__/
-*.py[cod]
-.pytest_cache/
-
-# Local runtime state. The example file is the template.
+*.pyc
 patience_state.json
 trigger_queue.jsonl
+latest_trigger_prompt.txt
+runtime/
+audit_log.jsonl
+audit_log.jsonl.head.json
+trigger_worker_checkpoint.json
+sandbox/
+*.jsonl
+.env

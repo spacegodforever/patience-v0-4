@@ -2,8 +2,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-QUEUE = Path("trigger_queue.jsonl")
-OUT = Path("latest_trigger_prompt.txt")
+BASE = Path(__file__).resolve().parent
+QUEUE = BASE / "trigger_queue.jsonl"
+OUT = BASE / "latest_trigger_prompt.txt"
 
 def consume_latest():
     if not QUEUE.exists():
@@ -25,6 +26,7 @@ def consume_latest():
     print(event["prompt"])
     print()
     print(f"Saved prompt to {OUT}")
+    print('Read-only export: queue status remains queued; nothing was sent to a model.')
 
 if __name__ == "__main__":
     consume_latest()

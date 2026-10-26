@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from engine import Patience
+from scheduler import parse_due
 
 class TriggerAgent:
     """
@@ -32,12 +33,27 @@ class TriggerAgent:
         self.idle_minutes = max(1, int(idle_minutes))
         self.last_trigger = None
         self.seen = set()
+        if self.queue_path.exists():
+            for number, line in enumerate(self.queue_path.read_text(encoding='utf-8').splitlines(), 1):
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                    self.seen.add(self._key(event['trigger_type'], event['payload']))
+                    timestamp = parse_due(event['timestamp'])
+                    self.last_trigger = max(self.last_trigger, timestamp) if self.last_trigger else timestamp
+                except (ValueError, KeyError, TypeError) as error:
+                    raise ValueError(f'Invalid trigger queue record at line {number}') from error
+
+    @staticmethod
+    def _key(trigger_type, payload):
+        return json.dumps({'type': trigger_type, 'payload': payload}, sort_keys=True)
 
     def _now(self):
         return datetime.now(timezone.utc)
 
     def _emit(self, trigger_type, payload):
-        key = json.dumps({"type": trigger_type, "payload": payload}, sort_keys=True)
+        key = self._key(trigger_type, payload)
         if key in self.seen:
             return False
 
@@ -49,6 +65,7 @@ class TriggerAgent:
             "status": "queued"
         }
 
+        self.queue_path.parent.mkdir(parents=True, exist_ok=True)
         with self.queue_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(event) + "\n")
 
@@ -131,7 +148,14 @@ Return:
 
         # Explicit checkpoint text
         checkpoint = self.p.state.next_checkpoint
-        if checkpoint and checkpoint not in ("", "No scheduled checkpoint"):
+        checkpoint_due = False
+        if checkpoint and checkpoint != 'No scheduled checkpoint':
+            try:
+                checkpoint_due = parse_due(checkpoint) <= now
+            except ValueError:
+                # Prose such as 'After human authorization' is not a timed checkpoint.
+                checkpoint_due = False
+        if checkpoint_due:
             if self._emit("checkpoint", {"checkpoint": checkpoint}):
                 emitted.append(("checkpoint", checkpoint))
 
@@ -143,6 +167,7 @@ Return:
                 "reason": "idle_reassessment",
                 "idle_minutes": self.idle_minutes,
                 "current_objective": self.p.state.current_objective,
+                "interval_start": self.last_trigger.isoformat(),
             }
             if self._emit("idle_reassessment", payload):
                 emitted.append(("idle_reassessment", self.idle_minutes))
@@ -163,4 +188,13 @@ Return:
             print("PATIENCE Trigger Agent stopped.")
 
 if __name__ == "__main__":
-    TriggerAgent().run_forever()
+    import argparse
+    base = Path(__file__).resolve().parent
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--once', action='store_true')
+    args = parser.parse_args()
+    agent = TriggerAgent(base / 'patience_state.json', base / 'trigger_queue.jsonl')
+    if args.once:
+        print(agent.inspect_once())
+    else:
+        agent.run_forever()

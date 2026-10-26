@@ -38,6 +38,18 @@ class GovernanceGate:
         )
 
     def may_execute(self, decision: Decision, authorized_actions: list[str]) -> bool:
-        if decision.action in self.AUTONOMOUS:
+        if not decision.requires_authorization and decision.action in self.AUTONOMOUS:
             return True
         return decision.action in authorized_actions
+
+    # ---- v0.5: per-decision authorization ----
+    def may_execute_decision(self, decision: dict, authorizations: dict, denials: dict | None = None) -> tuple[bool, str]:
+        """Authorization is bound to one decision id, never to an action type."""
+        did = decision.get("id")
+        if denials and did in denials:
+            return False, "decision was denied"
+        if did in authorizations:
+            return True, "authorized:" + str(authorizations[did].get("approver"))
+        if not decision.get("requires_authorization") and decision.get("action") in self.AUTONOMOUS:
+            return True, "autonomous_policy"
+        return False, "requires per-decision authorization"
