@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PATIENCE redacted demo event (draft)",
+  "type": "object",
+  "required": ["id", "type", "ts", "workflow", "actor"],
+  "properties": {
+    "id": {"type": "string"},
+    "type": {"enum": ["decision.proposed", "gate.evaluated", "approval.recorded", "action.executed", "audit.linked", "policy.failed_closed"]},
+    "ts": {"type": "string", "format": "date-time"},
+    "workflow": {"type": "string"},
+    "actor": {"type": "string", "description": "Pseudonymous tag, never a real identity"},
+    "result": {"enum": ["allow", "block", "needs_approval", "approved", "denied"]},
+    "rule": {"type": "string"},
+    "reason_code": {"type": "string", "description": "Example codes; structured reason codes are planned"},
+    "receipt": {"type": "string"},
+    "summary": {"type": "string", "description": "Identifying values replaced with [TOKENS]"}
+  },
+  "additionalProperties": false
+}
