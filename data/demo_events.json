@@ -1,0 +1,23 @@
+{
+  "tenant": "demo-sandbox",
+  "note": "Synthetic demo data only. No real people, customers or systems.",
+  "schema_version": "0.1",
+  "events": [
+    {"id":"evt-0001","type":"decision.proposed","ts":"2026-10-28T09:00:01Z","workflow":"invoice-reminder","actor":"agent-7f3a","summary":"Oracle recommends: allow (risk low)"},
+    {"id":"evt-0002","type":"gate.evaluated","ts":"2026-10-28T09:00:02Z","workflow":"invoice-reminder","actor":"core","result":"allow","rule":"R-12 allowlisted"},
+    {"id":"evt-0003","type":"action.executed","ts":"2026-10-28T09:00:02Z","workflow":"invoice-reminder","actor":"executor","receipt":"RCPT-0041"},
+    {"id":"evt-0004","type":"decision.proposed","ts":"2026-10-28T09:01:10Z","workflow":"delete-records","actor":"agent-2c91","summary":"Oracle recommends: allow"},
+    {"id":"evt-0005","type":"policy.failed_closed","ts":"2026-10-28T09:01:10Z","workflow":"delete-records","actor":"core","result":"block","reason_code":"POLICY_UNKNOWN"},
+    {"id":"evt-0006","type":"decision.proposed","ts":"2026-10-28T09:02:30Z","workflow":"refund","actor":"agent-7f3a","summary":"Refund [AMOUNT] to [CUSTOMER]"},
+    {"id":"evt-0007","type":"gate.evaluated","ts":"2026-10-28T09:02:31Z","workflow":"refund","actor":"core","result":"needs_approval","rule":"R-04 refunds over threshold"},
+    {"id":"evt-0008","type":"approval.recorded","ts":"2026-10-28T09:03:55Z","workflow":"refund","actor":"approver-A","result":"approved"},
+    {"id":"evt-0009","type":"action.executed","ts":"2026-10-28T09:03:56Z","workflow":"refund","actor":"executor","receipt":"RCPT-0042"},
+    {"id":"evt-0010","type":"audit.linked","ts":"2026-10-28T09:03:56Z","workflow":"refund","actor":"audit","summary":"Block appended to hash chain"},
+    {"id":"evt-0011","type":"decision.proposed","ts":"2026-10-28T09:05:12Z","workflow":"vendor-payment","actor":"agent-55be","summary":"Pay vendor [VENDOR]"},
+    {"id":"evt-0012","type":"gate.evaluated","ts":"2026-10-28T09:05:13Z","workflow":"vendor-payment","actor":"core","result":"needs_approval","rule":"R-07 payments"},
+    {"id":"evt-0013","type":"approval.recorded","ts":"2026-10-28T09:06:40Z","workflow":"vendor-payment","actor":"approver-B","result":"denied"},
+    {"id":"evt-0014","type":"decision.proposed","ts":"2026-10-28T09:07:02Z","workflow":"data-export","actor":"agent-2c91","summary":"Export table [TABLE]"},
+    {"id":"evt-0015","type":"policy.failed_closed","ts":"2026-10-28T09:07:02Z","workflow":"data-export","actor":"core","result":"block","reason_code":"SCOPE_MISSING"},
+    {"id":"evt-0016","type":"audit.linked","ts":"2026-10-28T09:07:03Z","workflow":"data-export","actor":"audit","summary":"Block appended to hash chain"}
+  ]
+}

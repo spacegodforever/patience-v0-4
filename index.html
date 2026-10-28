@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PATIENCE — Governed AI Orchestration (Live Demo)</title>
+<meta name="description" content="Interactive demo of PATIENCE: Oracle recommends, Core enforces, a human decides, unknown policy fails closed. Synthetic demo data only.">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="nav">
+  <a class="brand" href="#top">PATIENCE<span>*</span></a>
+  <nav>
+    <a href="#demos">Demos</a><a href="#feed">Live feed</a><a href="#developers">Developers</a><a href="#status">Status</a>
+  </nav>
+</header>
+
+<main id="top">
+<section class="hero">
+  <p class="eyebrow">Prototype · Synthetic demo data only</p>
+  <h1>AI can recommend.<br><em>Rules decide.</em> People approve.</h1>
+  <p class="lede">PATIENCE is a governed AI orchestration platform. The Oracle recommends, PATIENCE Core enforces rules deterministically, a human approves consequential decisions, and anything without a known policy fails closed.</p>
+  <ol class="pipeline" aria-label="How PATIENCE decides">
+    <li><b>Oracle</b><span>recommends</span></li>
+    <li><b>Core</b><span>enforces rules</span></li>
+    <li><b>Human</b><span>decides</span></li>
+    <li class="bad"><b>Unknown?</b><span>fails closed</span></li>
+  </ol>
+  <div class="cta"><a class="btn primary" href="#demos">See it work</a><a class="btn" href="#feed">Watch the feed</a></div>
+</section>
+
+<section class="block" id="audiences">
+  <h2>Pick your view</h2>
+  <div class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-tab="consumer">Consumers</button>
+    <button role="tab" aria-selected="false" data-tab="pm">Program managers</button>
+    <button role="tab" aria-selected="false" data-tab="dev">Developers</button>
+  </div>
+  <div class="tabpanel" data-panel="consumer">
+    <div class="cards">
+      <article><h3>Watch a decision happen</h3><p>Follow one request from recommendation to rule check to outcome.</p></article>
+      <article><h3>See why it was blocked</h3><p>Every block carries a reason, so "no" is never a mystery.</p></article>
+      <article><h3>Plain-English receipts</h3><p>Who approved, which rule applied, and when.</p></article>
+    </div>
+  </div>
+  <div class="tabpanel" data-panel="pm" hidden>
+    <div class="cards">
+      <article><h3>Per-decision human approval</h3><p>Consequential steps pause for a person before anything runs.</p></article>
+      <article><h3>Policy coverage</h3><p>Allowed actions come from an allowlist; unknown actions fail closed.</p></article>
+      <article><h3>Replay any run</h3><p>Step through a synthetic scenario gate by gate.</p></article>
+    </div>
+  </div>
+  <div class="tabpanel" data-panel="dev" hidden>
+    <div class="cards">
+      <article><h3>Event stream</h3><p>Redacted JSON events with a published draft schema.</p></article>
+      <article><h3>Verify the chain</h3><p>Recompute SHA-256 links in your browser.</p></article>
+      <article><h3>Download the data</h3><p>Grab the synthetic demo file and build your own views.</p></article>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="demos">
+  <h2>See it work</h2>
+  <p class="sub">Three workflows, synthetic data. Press Play or step through.</p>
+
+  <div class="demo" data-demo="block">
+    <div class="demo-head"><h3>1 · An AI action blocked by rules</h3><span class="tag bad">fails closed</span></div>
+    <div class="stages"></div>
+    <p class="note" aria-live="polite"></p>
+    <div class="controls"><button class="btn primary play">Play</button><button class="btn back">Back</button><button class="btn next">Next step</button></div>
+  </div>
+
+  <div class="demo" data-demo="approve">
+    <div class="demo-head"><h3>2 · Human approval produces a receipt</h3><span class="tag ok">receipt</span></div>
+    <div class="stages"></div>
+    <p class="note" aria-live="polite"></p>
+    <div class="receipt" hidden></div>
+    <div class="controls"><button class="btn primary play">Play</button><button class="btn back">Back</button><button class="btn next">Next step</button></div>
+  </div>
+
+  <div class="demo" id="chain-demo">
+    <div class="demo-head"><h3>3 · Tamper-evident audit-chain replay</h3><span class="tag">SHA-256, computed live</span></div>
+    <div class="chain" aria-live="polite"></div>
+    <p class="note" id="chain-note"></p>
+    <div class="controls">
+      <button class="btn primary" id="chain-play">Replay chain</button>
+      <button class="btn" id="chain-add">Append one block</button>
+      <button class="btn" id="chain-reset">Reset</button>
+      <label class="toggle"><input type="checkbox" id="chain-tamper"> Tamper with block 2</label>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="feed">
+  <h2>Live feed <span class="live">simulated</span></h2>
+  <p class="sub">Replayed on a loop from a synthetic demo tenant. Identifying values are replaced with tokens like <code>[CUSTOMER]</code>.</p>
+  <div class="filters" id="feed-filters"></div>
+  <ul class="feed" id="feed-list"></ul>
+</section>
+
+<section class="block" id="developers">
+  <h2>For developers</h2>
+  <div class="grid2">
+    <div>
+      <h3>Redacted event schema (draft)</h3>
+      <pre id="schema" class="code"></pre>
+      <a class="btn" href="data/event.schema.json" download>Download schema</a>
+    </div>
+    <div>
+      <h3>Sample event</h3>
+      <pre id="sample" class="code"></pre>
+      <a class="btn primary" href="data/demo_events.json" download>Download demo JSON</a>
+      <p class="small">Static files for now. A read-only API is planned.</p>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="connect">
+  <h2>Connect your own systems <span class="tag">planned</span></h2>
+  <p class="sub">None of this is built yet.</p>
+  <div class="cards">
+    <article><h3>Decision events only</h3><p>A customer-side connector would send proposals, rule results, approvals, receipts and hashes. No raw business records.</p></article>
+    <article><h3>Read-only, scoped access</h3><p>The narrowest read-only credentials. It can never act on your systems.</p></article>
+    <article><h3>Fails closed on missing permission</h3><p>Missing or unclear scope means nothing is sent, with a reason shown.</p></article>
+    <article><h3>Scrub, then preview</h3><p>Identifying fields removed on your side, with a preview of exactly what leaves.</p></article>
+    <article><h3>Your own private space</h3><p>Login-protected, per customer. Public feed is opt-in only.</p></article>
+    <article><h3>Sandbox CSV upload</h3><p>Try it with a CSV of sample decisions in a throwaway sandbox.</p></article>
+  </div>
+</section>
+
+<section class="block" id="status">
+  <h2>Exists today vs planned</h2>
+  <div class="grid2">
+    <div class="status ok">
+      <h3>Exists today (prototype)</h3>
+      <ul>
+        <li>Governance gate with fail-closed default</li>
+        <li>Per-decision human approval</li>
+        <li>Approved actions execute from an allowlist with receipts</li>
+        <li>Tamper-evident (hash-chained) audit log, local</li>
+        <li>MCP server (prototype)</li>
+        <li>Pluggable LLM assessment with rule-based fallback</li>
+      </ul>
+    </div>
+    <div class="status plan">
+      <h3>Planned or untested</h3>
+      <ul>
+        <li>Approver identity is not verified yet (authentication planned)</li>
+        <li>Structured reason codes (codes shown here are examples)</li>
+        <li>Real live event stream and read-only API</li>
+        <li>PII scrubbing pipeline and publishing gate</li>
+        <li>Customer connector, private spaces, CSV sandbox</li>
+        <li>Council and dashboard: built, untested</li>
+      </ul>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <p>PATIENCE by Patience Corp · Working prototype, not a production system · All data on this site is synthetic.</p>
+</footer>
+<script src="js/app.js"></script>
+</body>
+</html>
