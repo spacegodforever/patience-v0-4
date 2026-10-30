@@ -20,9 +20,9 @@ services:
     # ONE api process owns crash recovery (startup reconcile); don't scale this service.
     environment: {PATIENCE_BIND: "0.0.0.0"}  # container-network only; host publish below is loopback
     ports: ["127.0.0.1:8765:8765"]
-  dashboard:
+  dashboard:  # binds 0.0.0.0 inside the container network only; host publish is 127.0.0.1
     <<: *common
-    command: ["python", "-m", "streamlit", "run", "dashboard.py", "--server.address", "0.0.0.0",  # container-network only "--server.port", "8501"]
+    command: ["python", "-m", "streamlit", "run", "dashboard.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
     ports: ["127.0.0.1:8501:8501"]
     depends_on: [api]
   worker:
