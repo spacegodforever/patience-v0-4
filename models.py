@@ -28,6 +28,8 @@ class Assessment:
     assumptions: List[str]
     unknowns: List[str]
     competing_explanations: List[str]
+    risk_categories: List[str] = field(default_factory=list)
+    irreversible: bool = False
 
 @dataclass
 class ModelVote:
@@ -45,10 +47,6 @@ class Decision:
     requires_authorization: bool
     checkpoint: str
     reversible: bool = True
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    proposed: Optional[Dict[str, Any]] = None   # {"executor": name, "params": {...}}
-    status: str = "proposed"                    # proposed|pending_authorization|authorized|denied|executed|refused
-    created_at: str = field(default_factory=now_iso)
 
 @dataclass
 class Task:
@@ -62,7 +60,7 @@ class Task:
 
 @dataclass
 class PatienceState:
-    version: str = "0.5"
+    version: str = "0.3"
     mission: str = ""
     end_state: str = ""
     current_objective: str = ""
@@ -78,18 +76,12 @@ class PatienceState:
     authorized_actions: List[str] = field(default_factory=list)
     blocked_actions: List[str] = field(default_factory=list)
     memory: List[Dict[str, Any]] = field(default_factory=list)
-    authorizations: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # decision_id -> {approver, timestamp}
-    denials: Dict[str, Dict[str, Any]] = field(default_factory=dict)         # decision_id -> {approver, reason, timestamp}
-    receipts: Dict[str, Dict[str, Any]] = field(default_factory=dict)        # decision_id -> ExecutionReceipt
+    denied_actions: List[str] = field(default_factory=list)
+    requests: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    usage_log: List[Dict[str, Any]] = field(default_factory=list)  # rolling budgets (risk_policy.limits)
+    pending_usage: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # approval_key -> usage recorded on approval
+    executions: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # idempotency_key -> execution record
+    approval_log: List[Dict[str, Any]] = field(default_factory=list)  # who approved/denied what, when, why
+    used_links: Dict[str, float] = field(default_factory=dict)  # signed-link nonce -> expiry (single use)
     next_checkpoint: str = ""
     last_updated: str = field(default_factory=now_iso)
-
-@dataclass
-class ExecutionReceipt:
-    decision_id: str
-    approver: str
-    executor: str
-    result: Dict[str, Any]
-    result_hash: str
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    timestamp: str = field(default_factory=now_iso)

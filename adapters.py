@@ -51,7 +51,19 @@ class OpportunityAdapter(BaseModelAdapter):
 
 class ModelCouncil:
     def __init__(self, adapters: List[BaseModelAdapter] | None = None):
-        self.adapters = adapters or [OracleAdapter(), SkepticAdapter(), OpportunityAdapter()]
+        if adapters is None:
+            adapters = [OracleAdapter(), SkepticAdapter(), OpportunityAdapter()]
+            # v0.5: optional advisory LLM vote, only when PATIENCE_LLM_API_KEY is set
+            try:
+                from llm_adapter import LLMAdapter, llm_enabled
+                import second_opinion
+                # One LLM call per check: when the second opinion is on it is the LLM's only
+                # say (it can escalate but never downgrade); the advisory council vote is skipped.
+                if llm_enabled() and not second_opinion.enabled():
+                    adapters.append(LLMAdapter())
+            except ImportError:
+                pass
+        self.adapters = adapters
 
     def deliberate(self, assessment: Assessment) -> List[ModelVote]:
         return [adapter.vote(assessment) for adapter in self.adapters]

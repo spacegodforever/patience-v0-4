@@ -4,14 +4,17 @@ class GovernanceGate:
     AUTONOMOUS = {"respond","research","summarize","log","wait","remind","inspect_state"}
 
     def decide(self, recommendation: str, a: Assessment, cheapest_test: str) -> Decision:
-        if recommendation == "human_review" or a.consequence >= .7:
+        cats = getattr(a, "risk_categories", []) or []
+        if cats or recommendation == "human_review" or a.consequence >= .7:
+            reason = ("Side-effect categories " + ", ".join(cats) + " require explicit authorization."
+                      if cats else "Consequence threshold requires explicit authorization.")
             return Decision(
                 action="human_review",
-                reason="Consequence threshold requires explicit authorization.",
+                reason=reason,
                 confidence=a.confidence,
                 requires_authorization=True,
                 checkpoint="After human authorization",
-                reversible=False
+                reversible=not bool(getattr(a, "irreversible", False) or not cats)
             )
         if recommendation == "research":
             return Decision(
@@ -37,19 +40,23 @@ class GovernanceGate:
             checkpoint="After user response"
         )
 
-    def may_execute(self, decision: Decision, authorized_actions: list[str]) -> bool:
-        if not decision.requires_authorization and decision.action in self.AUTONOMOUS:
+    # Generic action names that must never be standing-authorized: approving
+    # "human_review" once would silently approve every future risky request.
+    NEVER_STANDING = {"human_review", "prototype"}
+
+    @staticmethod
+    def approval_key(decision: Decision, content: str = "", obs_id: str = "") -> str:
+        """Specific, per-request key shown in blocked_actions."""
+        snippet = " ".join(content.split())[:80]
+        tag = f" #{obs_id[:8]}" if obs_id else ""
+        return f"{decision.action}: {snippet}{tag}" if snippet else decision.action
+
+    def may_execute(self, decision: Decision, authorized_actions: list[str], key: str | None = None) -> bool:
+        if decision.requires_authorization:
+            k = key or decision.action
+            if k in self.NEVER_STANDING:
+                return False
+            return k in authorized_actions
+        if decision.action in self.AUTONOMOUS:
             return True
         return decision.action in authorized_actions
-
-    # ---- v0.5: per-decision authorization ----
-    def may_execute_decision(self, decision: dict, authorizations: dict, denials: dict | None = None) -> tuple[bool, str]:
-        """Authorization is bound to one decision id, never to an action type."""
-        did = decision.get("id")
-        if denials and did in denials:
-            return False, "decision was denied"
-        if did in authorizations:
-            return True, "authorized:" + str(authorizations[did].get("approver"))
-        if not decision.get("requires_authorization") and decision.get("action") in self.AUTONOMOUS:
-            return True, "autonomous_policy"
-        return False, "requires per-decision authorization"

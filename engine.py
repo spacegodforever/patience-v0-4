@@ -1,65 +1,123 @@
 from dataclasses import asdict
-from pathlib import Path
-from models import Observation, Task, ExecutionReceipt, now_iso
-from llm_oracle import LLMOracle
-from audit_log import AuditLog
-from executor import ExecutorRegistry, ExecutionRefused, result_hash
+from models import Observation, Task
+from oracle import Oracle
 from adapters import ModelCouncil
 from governance import GovernanceGate
 from scheduler import TemporalLayer
 from memory_store import MemoryStore
 
+
+def second_opinion_risk(content, tags=(), rules_categories=None):
+    """LLM second opinion -> extra_risk dict, or None. Skipped without an API key."""
+    import second_opinion
+    if not second_opinion.enabled():
+        return None
+    if rules_categories is None:
+        from risk_policy import classify
+        rules_categories = classify(content, tags)["categories"]
+    op = second_opinion.review(content, rules_categories)
+    if op.get("disagree"):
+        return {"categories": ["llm_disagreement"], "consequence": .75, "irreversible": False,
+                "reasons": [f"LLM second opinion: {op.get('reason', '')}"], "second_opinion": op}
+    return {"categories": [], "second_opinion": op}
+
+
 class Patience:
-    def __init__(self, state_path="patience_state.json", audit_path=None, sandbox_dir=None, oracle=None):
-        state_path = Path(state_path)
+    # Public mutators reload state under a file lock, then save atomically.
+    def __init__(self, state_path="patience_state.json"):
         self.memory_store = MemoryStore(state_path)
         self.state = self.memory_store.load()
-        self.audit = AuditLog(audit_path or state_path.with_name("audit_log.jsonl"))
-        self.executors = ExecutorRegistry(sandbox_dir or state_path.with_name("sandbox"))
-        self.oracle = oracle or LLMOracle()
+        # Repair legacy state: generic standing approvals are not allowed.
+        bad = [x for x in self.state.authorized_actions if x in GovernanceGate.NEVER_STANDING]
+        if bad:
+            self.state.authorized_actions = [x for x in self.state.authorized_actions if x not in bad]
+        self.oracle = Oracle()
         self.council = ModelCouncil()
         self.governance = GovernanceGate()
         self.time = TemporalLayer()
 
-    def set_mission(self, mission, end_state, objective, priority):
-        def text(name, value):
-            if value is None:
-                return ""
-            if isinstance(value, bool) or not isinstance(value, (str, int, float)):
-                raise ValueError(f"{name} must be text")
-            return str(value).strip()
-        self.state.mission = text("mission", mission)
-        self.state.end_state = text("end_state", end_state)
-        self.state.current_objective = text("objective", objective)
-        self.state.priority = text("priority", priority)  # numeric priority coerced to str (v0.4 dashboard crash)
-        self.memory_store.save(self.state)
-        self.audit.append("mission_set", {"mission": self.state.mission, "priority": self.state.priority})
+    def refresh(self):
+        self.state = self.memory_store.load()
+        bad = [x for x in self.state.authorized_actions if x in GovernanceGate.NEVER_STANDING]
+        if bad:
+            self.state.authorized_actions = [x for x in self.state.authorized_actions if x not in bad]
 
-    def authorize(self, action):
+    def _set_mission_unlocked(self, mission, end_state, objective, priority):
+        self.state.mission = mission
+        self.state.end_state = end_state
+        self.state.current_objective = objective
+        self.state.priority = priority
+        self.memory_store.save(self.state)
+
+    def _authorize_unlocked(self, action):
+        if action in GovernanceGate.NEVER_STANDING:
+            # Legacy generic entry: clear it, but never grant a standing approval.
+            self.state.blocked_actions = [x for x in self.state.blocked_actions if x != action]
+            self.memory_store.save(self.state)
+            return False
         if action not in self.state.authorized_actions:
             self.state.authorized_actions.append(action)
+            pend = self.state.pending_usage.pop(action, None)
+            if pend:  # approved work counts toward the agent's rolling budget
+                self._record_usage(pend["identity"], pend["tool"], pend["usage"])
         self.state.blocked_actions = [x for x in self.state.blocked_actions if x != action]
         self.memory_store.save(self.state)
-        self.audit.append("legacy_action_type_authorization", {"action": action,
-                          "note": "v0.4 record only; execution requires authorize_decision"})
+        return True
 
-    def add_task(self, title, due_at=None, priority=3):
+    def _add_task_unlocked(self, title, due_at=None, priority=3):
         self.time.add_task(self.state, Task(title=title, due_at=due_at, priority=priority))
         self.state.next_checkpoint = self.time.next_checkpoint(self.state)
         self.memory_store.save(self.state)
 
-    def cycle(self, content, source="user", reliability=.9, proposed=None):
-        if not isinstance(content, str) or not content.strip():
-            raise ValueError("Observation must contain text.")
-        if not isinstance(reliability, (int, float)) or not 0 <= reliability <= 1:
-            raise ValueError("Reliability must be between zero and one.")
-        obs = Observation(content=content, source=source, reliability=reliability)
+    def _budget_risk(self, identity, tool, usage):
+        """Rolling per-identity budgets. Returns (extra_risk or None, usage)."""
+        import risk_policy
+        crossed = risk_policy.check_budgets(self.state.usage_log, identity, tool, usage, risk_policy.now())
+        if not crossed:
+            return None
+        return {"categories": ["budget_exceeded"], "consequence": .85, "irreversible": True,
+                "reasons": ["rolling budget: " + "; ".join(crossed)]}
+
+    def _record_usage(self, identity, tool, usage):
+        import risk_policy
+        t = risk_policy.now()
+        self.state.usage_log = risk_policy.prune_usage(self.state.usage_log, t)
+        self.state.usage_log.append({"requester": identity, "tool": tool, "ts": t, "usage": usage})
+
+    def _cycle_unlocked(self, content, source="user", reliability=.9, tags=(), extra_risk=None,
+                        identity=None, tool=None, usage=None):
+        """extra_risk: optional {"categories": [...], "consequence": float, "irreversible": bool,
+        "reasons": [...]} from tool-arg scoring, budgets, or the LLM second opinion. It can only
+        ADD risk to the rules assessment, never remove it."""
+        obs = Observation(content=content, source=source, reliability=reliability, tags=list(tags or []))
         self.state.observations.append(asdict(obs))
 
         assessment = self.oracle.assess(obs, self.state)
-        oracle_path = getattr(self.oracle, "last_path", "heuristic")
-        oracle_error = getattr(self.oracle, "last_error", None)
-        self.state.assessments.append({**asdict(assessment), "oracle_path": oracle_path})
+        if identity:
+            # budgets are keyed on the authenticated identity, for tool AND free-text calls
+            import risk_policy
+            if usage is None:
+                usage = risk_policy.text_usage(content, assessment.risk_categories)
+            usage = {**usage, "calls": 1}
+            tool = tool or "text"
+            b = self._budget_risk(identity, tool, usage)
+            if b:
+                extra_risk = dict(extra_risk or {})
+                extra_risk["categories"] = list(extra_risk.get("categories", [])) + b["categories"]
+                extra_risk["consequence"] = max(float(extra_risk.get("consequence", 0)), b["consequence"])
+                extra_risk["irreversible"] = True
+                extra_risk.setdefault("reasons", [])
+                extra_risk["reasons"] = list(extra_risk["reasons"]) + b["reasons"]
+        if extra_risk and extra_risk.get("categories"):
+            for c in extra_risk["categories"]:
+                if c not in assessment.risk_categories:
+                    assessment.risk_categories.append(c)
+                    assessment.unknowns.append(f"Side-effect category '{c}' requires human authorization.")
+            assessment.consequence = max(assessment.consequence, float(extra_risk.get("consequence", .75)))
+            assessment.irreversible = bool(assessment.irreversible or extra_risk.get("irreversible"))
+            if "unknown_side_effect" in assessment.risk_categories and len(assessment.risk_categories) > 1:
+                assessment.risk_categories.remove("unknown_side_effect")
+        self.state.assessments.append(asdict(assessment))
         self.state.assumptions = assessment.assumptions
         self.state.unknowns = assessment.unknowns
 
@@ -70,24 +128,27 @@ class Patience:
         recommendation = self.council.consensus(votes)
 
         decision = self.governance.decide(recommendation, assessment, red["cheapest_test"])
-        if proposed is not None:
-            if not isinstance(proposed, dict) or "executor" not in proposed:
-                raise ValueError("proposed must be {'executor': name, 'params': {...}}")
-            decision.proposed = {"executor": str(proposed["executor"]), "params": proposed.get("params") or {}}
-        auto_ok, _ = self.governance.may_execute_decision(asdict(decision), {}, {})
-        decision.status = "proposed" if auto_ok else "pending_authorization"
         self.state.decisions.append(asdict(decision))
-        self.state.next_checkpoint = self.time.next_checkpoint(self.state)
+        self.state.next_checkpoint = decision.checkpoint
 
-        allowed = self.governance.may_execute(decision, self.state.authorized_actions)
-        if not allowed and decision.action not in self.state.blocked_actions:
-            self.state.blocked_actions.append(decision.action)
+        key = (self.governance.approval_key(decision, obs.content, obs.id)
+               if decision.requires_authorization else decision.action)
+        allowed = self.governance.may_execute(decision, self.state.authorized_actions, key)
+        if not allowed and key not in self.state.blocked_actions:
+            self.state.blocked_actions.append(key)
+        if identity:
+            if allowed:
+                self._record_usage(identity, tool, usage)
+            else:  # counted only if a human approves it
+                self.state.pending_usage[key] = {"identity": identity, "tool": tool, "usage": usage}
 
         verification = {
-            "verified": False,
-            "authorized": allowed,
-            "executed": False,
-            "status": "authorized_not_executed" if allowed else "blocked_pending_authorization",
+            "verified": allowed,
+            "status": "ready_or_executed" if allowed else "blocked_pending_authorization",
+            "approval_key": key,
+            "risk_categories": assessment.risk_categories,
+            "budget_reasons": (extra_risk or {}).get("reasons", []),
+            "identity": identity,
             "expected_outcome": decision.checkpoint
         }
 
@@ -98,18 +159,8 @@ class Patience:
             decision.confidence
         )
         self.memory_store.save(self.state)
-        self.audit.append("decision", {
-            "decision_id": decision.id, "action": decision.action, "status": decision.status,
-            "requires_authorization": decision.requires_authorization, "proposed": decision.proposed,
-            "observation": obs.content, "oracle_path": oracle_path, "oracle_error": oracle_error,
-            "assessment": asdict(assessment),
-        })
-        self.audit.append("votes", {"decision_id": decision.id, "consensus": recommendation,
-                                    "votes": [asdict(v) for v in votes]})
 
         return {
-            "decision_id": decision.id,
-            "oracle_path": oracle_path,
             "observation": asdict(obs),
             "assessment": asdict(assessment),
             "red_team": red,
@@ -120,76 +171,33 @@ class Patience:
             "next_checkpoint": self.state.next_checkpoint
         }
 
-    # ---------------- v0.5: per-decision approvals + execution ----------------
-    def get_decision(self, decision_id):
-        for d in self.state.decisions:
-            if d.get("id") == decision_id:
-                return d
-        raise KeyError(f"unknown decision {decision_id}")
+    def set_mission(self, mission, end_state, objective, priority):
+        with self.memory_store.locked():
+            self.refresh()
+            return self._set_mission_unlocked(mission, end_state, objective, priority)
 
-    def propose(self, content, executor, params=None, source="user", reliability=.9):
-        return self.cycle(content, source, reliability, proposed={"executor": executor, "params": params or {}})
+    def authorize(self, action):
+        with self.memory_store.locked():
+            self.refresh()
+            return self._authorize_unlocked(action)
 
-    def pending(self):
-        return [d for d in self.state.decisions if d.get("status") == "pending_authorization"]
+    def add_task(self, title, due_at=None, priority=3):
+        with self.memory_store.locked():
+            self.refresh()
+            return self._add_task_unlocked(title, due_at, priority)
 
-    def authorize_decision(self, decision_id, approver):
-        if not approver or not str(approver).strip():
-            raise ValueError("approver required")
-        d = self.get_decision(decision_id)
-        if decision_id in self.state.denials:
-            raise ValueError("decision already denied")
-        if decision_id in self.state.receipts:
-            return self.state.authorizations.get(decision_id)
-        record = {"approver": str(approver), "timestamp": now_iso()}
-        self.state.authorizations[decision_id] = record
-        d["status"] = "authorized"
-        self.memory_store.save(self.state)
-        self.audit.append("authorization", {"decision_id": decision_id, **record})
-        return record
+    def cycle(self, content, source="user", reliability=.9, tags=(), identity=None):
+        extra = second_opinion_risk(content, tags)  # network call happens outside the state lock
+        with self.memory_store.locked():
+            self.refresh()
+            return self._cycle_unlocked(content, source, reliability, tags, extra, identity=identity)
 
-    def deny_decision(self, decision_id, approver, reason=""):
-        d = self.get_decision(decision_id)
-        if decision_id in self.state.receipts:
-            raise ValueError("decision already executed")
-        record = {"approver": str(approver), "reason": str(reason), "timestamp": now_iso()}
-        self.state.denials[decision_id] = record
-        self.state.authorizations.pop(decision_id, None)
-        d["status"] = "denied"
-        self.memory_store.save(self.state)
-        self.audit.append("denial", {"decision_id": decision_id, **record})
-        return record
-
-    def execute(self, decision_id, approver=None):
-        """Run the decision's proposed allowlisted action once. Returns the receipt dict.
-        Re-running an executed decision returns the existing receipt and does nothing."""
-        if decision_id in self.state.receipts:
-            return {**self.state.receipts[decision_id], "already_executed": True}
-        d = self.get_decision(decision_id)
-        ok, why = self.governance.may_execute_decision(d, self.state.authorizations, self.state.denials)
-        proposed = d.get("proposed")
-        if ok and not proposed:
-            ok, why = False, "decision has no proposed executable action"
-        if ok and proposed["executor"] not in self.executors.allowlist:
-            ok, why = False, f"executor '{proposed['executor']}' is not allowlisted"
-        if not ok:
-            self.audit.append("execution_refused", {"decision_id": decision_id, "reason": why})
-            raise ExecutionRefused(why)
-        try:
-            result = self.executors.run(proposed["executor"], proposed.get("params") or {}, self)
-        except ExecutionRefused as e:
-            self.audit.append("execution_refused", {"decision_id": decision_id, "reason": str(e)})
-            raise
-        who = self.state.authorizations.get(decision_id, {}).get("approver") or approver or "policy:autonomous"
-        receipt = asdict(ExecutionReceipt(decision_id=decision_id, approver=who, executor=proposed["executor"],
-                                          result=result, result_hash=result_hash(result)))
-        self.state.receipts[decision_id] = receipt
-        d["status"] = "executed"
-        self.memory_store.save(self.state)
-        self.audit.append("execution", {"decision_id": decision_id, "receipt_id": receipt["id"],
-                                        "approver": who, "executor": receipt["executor"],
-                                        "result_hash": receipt["result_hash"]})
-        return receipt
-
-    def verify_audit(self):
-        return self.audit.verify()
+    def deny(self, key):
+        with self.memory_store.locked():
+            self.refresh()
+            self.state.blocked_actions = [x for x in self.state.blocked_actions if x != key]
+            self.state.authorized_actions = [x for x in self.state.authorized_actions if x != key]
+            if key not in self.state.denied_actions:
+                self.state.denied_actions.append(key)
+            self.state.pending_usage.pop(key, None)
+            self.memory_store.save(self.state)

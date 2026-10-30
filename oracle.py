@@ -1,19 +1,32 @@
 from __future__ import annotations
-from typing import Dict, Any
+import re
+from typing import Dict, Any, List, Tuple
 from models import Assessment, Observation, PatienceState
 
 class Oracle:
-    RISK_WORDS = {
-        "legal": .85, "medical": .9, "security": .85, "money": .65,
-        "payment": .7, "delete": .7, "publish": .6, "irreversible": .95,
-        "danger": .95, "privacy": .8, "credential": .85
-    }
+    """Assessment of an observation. Risk categories come from risk_policy.classify."""
+    # Risk scoring is policy-driven: see risk_policy.py and policies/default.yaml.
+
+    def risk_categories(self, text: str, tags=()):
+        from risk_policy import classify
+        r = classify(text, tags)
+        return r["categories"], r["consequence"], r["irreversible"]
 
     def assess(self, obs: Observation, state: PatienceState) -> Assessment:
         text = obs.content.lower()
         urgency = .8 if any(w in text for w in ["now","urgent","today","deadline","immediately"]) else .35
-        consequence = max([v for k,v in self.RISK_WORDS.items() if k in text] or [.25])
-        opportunity = .8 if any(w in text for w in ["build","prototype","launch","test","integrate","improve"]) else .35
+        from risk_policy import classify
+        if "tool_call" in (obs.tags or []):
+            # structured call: risk comes from the tool args (engine extra_risk), not this summary text
+            risk = {"categories": [], "consequence": .25, "irreversible": False, "read_only": False}
+        else:
+            risk = classify(obs.content, obs.tags)
+        categories, consequence, irreversible = risk["categories"], risk["consequence"], risk["irreversible"]
+        if risk["read_only"]:
+            opportunity_ok = False
+        else:
+            opportunity_ok = True
+        opportunity = .8 if opportunity_ok and any(w in text for w in ["build","prototype","launch","test","integrate","improve"]) else .35
         uncertainty = .75 if any(w in text for w in ["maybe","unclear","unknown","guess","possibly","not sure"]) else .3
 
         objective_words = set(state.current_objective.lower().split())
@@ -34,6 +47,8 @@ class Oracle:
             unknowns.append("Material context may be missing.")
         if consequence >= .7:
             unknowns.append("Downstream consequence requires explicit review.")
+        for c in categories:
+            unknowns.append(f"Side-effect category '{c}' requires human authorization.")
 
         return Assessment(
             relevance=relevance,
@@ -49,7 +64,9 @@ class Oracle:
                 "Observation is materially correct and actionable.",
                 "Observation is directionally correct but incomplete.",
                 "Observation is low-signal or misleading and should not drive action."
-            ]
+            ],
+            risk_categories=categories,
+            irreversible=irreversible,
         )
 
     def red_team(self, a: Assessment) -> Dict[str, Any]:
