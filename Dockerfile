@@ -10,4 +10,7 @@ RUN useradd -u 10001 -m patience && mkdir -p /data && chown patience /data
 USER patience
 VOLUME ["/data"]
 EXPOSE 8765 8501
-CMD ["python", "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8765", "--workers", "1"]
+# Loopback by default. Inside docker-compose the bind is widened to the container network only and
+# the host port is published on 127.0.0.1 (see docker-compose.yml and docs/SECURITY.md).
+ENV PATIENCE_BIND=127.0.0.1
+CMD ["sh", "-c", "exec python -m uvicorn api:app --host \"$PATIENCE_BIND\" --port 8765 --workers 1"]

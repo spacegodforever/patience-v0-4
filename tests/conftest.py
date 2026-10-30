@@ -18,4 +18,8 @@ def _isolate(tmp_path, monkeypatch):
         monkeypatch.delenv(v, raising=False)
     import approvers
     approvers._FAILS.clear()
+    import api as _api
+    getattr(_api, "_IP_FAILS", {}).clear()
+    # pre-v0.6 tests use open dev mode; fail-closed tests unset this explicitly
+    monkeypatch.setenv("PATIENCE_DEV_OPEN", "1")
     yield

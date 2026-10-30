@@ -92,7 +92,7 @@ def test_brute_force_throttled(c):
     rid = risky(client, key)
     for _ in range(5):
         client.post(f"/v1/requests/{rid}/approve", headers=basic("bob", "nope"))
-    assert client.post(f"/v1/requests/{rid}/approve", headers=basic("bob", "bob-password-12")).status_code == 403
+    assert client.post(f"/v1/requests/{rid}/approve", headers=basic("bob", "bob-password-12")).status_code in (403, 429)
 
 
 def test_legacy_token_needs_explicit_flag(c, monkeypatch):

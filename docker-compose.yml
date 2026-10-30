@@ -1,6 +1,10 @@
 # docker compose up --build
 # First run: docker compose run --rm api python patience_cli.py init --generate-password --pin --agent my-agent
 # Ports are published on 127.0.0.1 only; put a TLS reverse proxy in front to expose them.
+# Bind: the image defaults to PATIENCE_BIND=127.0.0.1. Docker port publishing cannot reach a
+# process bound to the container's own loopback, so compose sets PATIENCE_BIND=0.0.0.0 INSIDE the
+# container's private network while the HOST side stays 127.0.0.1-only. Never change the
+# "127.0.0.1:" prefix on the ports below; to go remote, see docs/SECURITY.md (reverse proxy).
 x-common: &common
   build: .
   env_file:
@@ -14,11 +18,11 @@ services:
   api:
     <<: *common
     # ONE api process owns crash recovery (startup reconcile); don't scale this service.
-    command: ["python", "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8765", "--workers", "1"]
+    environment: {PATIENCE_BIND: "0.0.0.0"}  # container-network only; host publish below is loopback
     ports: ["127.0.0.1:8765:8765"]
   dashboard:
     <<: *common
-    command: ["python", "-m", "streamlit", "run", "dashboard.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
+    command: ["python", "-m", "streamlit", "run", "dashboard.py", "--server.address", "0.0.0.0",  # container-network only "--server.port", "8501"]
     ports: ["127.0.0.1:8501:8501"]
     depends_on: [api]
   worker:

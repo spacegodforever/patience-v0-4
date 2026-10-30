@@ -28,9 +28,15 @@ def decide(p, key: str, approve: bool, approver: dict, reason: str = "", via: st
     with p.memory_store.locked():
         p.refresh()
         p.state.approval_log.append(rec)
+        same = [r for r in p.state.requests.values() if r.get("approval_key") == key]
+        anchor = next((r for r in same if r["request_id"] == request_id), None) or (same[0] if same else None)
+        approved_hash = anchor.get("args_hash") if anchor else None
         for r in p.state.requests.values():
             if r.get("approval_key") == key and (request_id is None or r["request_id"] == request_id):
                 r["decided"] = {k: rec[k] for k in ("decision", "approver", "at", "reason", "via")}
+            # bind the approval to the exact payload the approver saw (per request)
+            if approve and r.get("approval_key") == key and r.get("args_hash") == approved_hash:
+                r["approved_args_hash"] = approved_hash
         p.memory_store.save(p.state)
     audit.append("approval." + rec["decision"], approver["user"],
                  **{k: rec[k] for k in ("approval_key", "request_id", "role", "reason", "via")})

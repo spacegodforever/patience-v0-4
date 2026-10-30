@@ -17,7 +17,7 @@ constant-time comparison.
 Modes:
   * agents.yaml present with >= 1 agent -> every /v1 call needs "Authorization: Bearer <agent key>"; unknown key -> 401.
   * no agents file -> legacy single-token mode: PATIENCE_API_TOKEN (identity "default"),
-    or, if that is unset too, local dev mode (identity "local-dev"). /v1/execute is refused
+    or, if that is unset too, 401 (fail closed) unless PATIENCE_DEV_OPEN=1 enables local dev mode (identity "local-dev"). /v1/execute is refused
     outside agent-key mode.
 """
 from __future__ import annotations

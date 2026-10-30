@@ -19,6 +19,7 @@ import envfile
 envfile.load()
 import copy
 import hashlib
+import time
 import hmac
 import contextlib
 import json
@@ -80,7 +81,15 @@ def require_caller(authorization: Optional[str] = Header(None)) -> dict:
         if not bearer or not _eq(bearer, token):
             raise HTTPException(401, "Missing or invalid bearer token.")
         return {"id": "default", "mode": "token"}
-    return {"id": "local-dev", "mode": "dev"}
+    if dev_open():
+        return {"id": "local-dev", "mode": "dev"}
+    # fail closed: no agent keys and no token configured
+    raise HTTPException(401, "API auth not configured: add agents.yaml or PATIENCE_API_TOKEN "
+                             "(or set PATIENCE_DEV_OPEN=1 for local development only).")
+
+
+def dev_open() -> bool:
+    return os.environ.get("PATIENCE_DEV_OPEN") == "1"
 
 
 def _basic(authorization: Optional[str]):
@@ -97,18 +106,51 @@ def legacy_token_enabled() -> bool:
     return os.environ.get("PATIENCE_LEGACY_APPROVER_TOKEN") == "1" and bool(os.environ.get("PATIENCE_APPROVER_TOKEN"))
 
 
-def require_approver(authorization: Optional[str] = Header(None),
+# Per-client-IP brute-force limit (in-process; complements the per-user lockout in approvers.py).
+_IP_FAILS: dict = {}  # ip -> [fail timestamps], locked_until stored under (ip, "lock")
+IP_MAX_FAILS, IP_WINDOW_S, IP_LOCK_S = 20, 600, 900
+
+
+def _client_ip(request: Optional[Request]) -> str:
+    return (request.client.host if request is not None and request.client else "unknown")
+
+
+def _ip_locked(ip: str) -> bool:
+    return _IP_FAILS.get((ip, "lock"), 0) > time.time()
+
+
+def _ip_fail(ip: str):
+    now = time.time()
+    hits = [t for t in _IP_FAILS.get(ip, []) if now - t < IP_WINDOW_S] + [now]
+    _IP_FAILS[ip] = hits
+    if len(hits) >= IP_MAX_FAILS:
+        _IP_FAILS[(ip, "lock")] = now + IP_LOCK_S
+        _IP_FAILS[ip] = []
+
+
+def _auth_locked(ip: str, user: str) -> bool:
+    return _ip_locked(ip) or approvers._throttled((user or "").strip())
+
+
+def require_approver(request: Request, authorization: Optional[str] = Header(None),
                      x_approver_token: Optional[str] = Header(None)) -> dict:
     """A human approver: per-user HTTP Basic (approvers.yaml). Agent bearer keys never qualify."""
     creds = _basic(authorization)
+    ip = _client_ip(request)
     if creds:
+        if _auth_locked(ip, creds[0]):
+            audit.append("auth.locked", creds[0][:100], channel="api")
+            raise HTTPException(429, "Too many failed attempts; try again later.")
         who = approvers.verify_password(*creds)
         if who:
             return who
+        _ip_fail(ip)
         audit.append("auth.failed", creds[0][:100], channel="api")
         raise HTTPException(403, "Invalid approver credentials.")
     if x_approver_token is not None and legacy_token_enabled():
         if _eq(x_approver_token, os.environ["PATIENCE_APPROVER_TOKEN"]):
+            audit.append("auth.legacy_token_used", "legacy-token", channel="api",
+                         note="DEPRECATED: shared approver token; will be removed. Use approvers.yaml accounts.")
             return {"user": "legacy-token", "role": "approver", "legacy": True}
         raise HTTPException(403, "Invalid approver token.")
     raise HTTPException(403, "Approver login required (HTTP Basic with an approvers.yaml account).")
@@ -203,7 +245,8 @@ def _map(decision: str, allowed: bool, duplicate: bool) -> str:
 def health():
     return {"status": "ok", "version": VERSION, "time": now_iso(),
             "auth": "agent_keys" if identity.agent_mode() else (
-                "shared_token" if os.environ.get("PATIENCE_API_TOKEN") else "dev_open")}
+                "shared_token" if os.environ.get("PATIENCE_API_TOKEN") else (
+                    "dev_open" if dev_open() else "not_configured_fail_closed"))}
 
 
 def _check_impl(body: CheckIn, caller: dict) -> dict:
@@ -230,8 +273,11 @@ def _check_impl(body: CheckIn, caller: dict) -> dict:
     with p.memory_store.locked():
         p.refresh()
         extra = _merge(tool_risk, llm)
+        cur_hash = args_hash(tool_name, body.args) if body.tool else None
+        # duplicates must match the FULL args hash, never just the (truncated) label
         pending_same = [r for r in p.state.requests.values()
-                        if r.get("action") == action_desc and r.get("identity", who) == who
+                        if r.get("action") == action_desc and r.get("args_hash") == cur_hash
+                        and r.get("identity", who) == who
                         and _status(p.state, r) == "pending"]
         out = p._cycle_unlocked(text, source=f"api:{who}", reliability=.9, tags=tags, extra_risk=extra,
                                 identity=who, tool=tool_name or None, usage=usage)
@@ -380,6 +426,8 @@ def execute(body: ExecuteIn, caller: dict = Depends(require_caller)):
                 raise HTTPException(409, "This approval was already used (executed once). Submit a new request.")
             if st == "denied":
                 raise HTTPException(403, "Request was denied.")
+            if st == "approved" and req.get("approved_args_hash") != h:
+                raise HTTPException(409, "Approval was granted for different args; a new approval is required.")
             if st not in ("allowed", "approved"):
                 return JSONResponse(status_code=202, content={
                     "status": "pending_approval", "request_id": req["request_id"], "approval_key": req["approval_key"]})
@@ -554,9 +602,14 @@ async def link_submit(token: str, request: Request):
     except HTTPException as e:
         return _err_page(e)
     user = form.get("user", "")[:100]
+    ip = _client_ip(request)
+    if _auth_locked(ip, user):
+        audit.append("auth.locked", user, channel="link", request_id=req["request_id"])
+        return _page("Too many attempts", "<p>Too many failed attempts. Try again later.</p>", 429)
     who = approvers.verify_password(user, form["password"]) if form.get("password") else (
         approvers.verify_pin(user, form["pin"]) if form.get("pin") else None)
     if not who:
+        _ip_fail(ip)
         audit.append("auth.failed", user, channel="link", request_id=req["request_id"])
         return _page("Not authorized", "<p>Wrong username, password or PIN.</p>", 403)
     with p.memory_store.locked():  # consume first: a link works once even if the decision then fails
