@@ -22,3 +22,9 @@ patience_audit.jsonl.head
 policy.yaml
 policies/*.bak
 *.egg-info/
+
+# coordinator runtime / UI build artifacts
+*.db
+node_modules/
+ui/**/dist/
+*.tsbuildinfo
