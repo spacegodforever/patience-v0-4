@@ -63,7 +63,9 @@ def append(event: str, actor: Optional[str] = None, **data: Any) -> dict:
             f.write(line)
             f.flush()
             os.fsync(f.fileno())
-        _head(p).write_text(rec["hash"], encoding="utf-8")
+        tmp = _head(p).with_suffix(".head.tmp")  # atomic replace: a crash never leaves a torn head
+        tmp.write_text(rec["hash"], encoding="utf-8")
+        os.replace(tmp, _head(p))
     return rec
 
 
