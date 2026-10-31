@@ -88,7 +88,7 @@ def login(body: LoginIn, request: Request, response: Response):
     tok, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
     audit.append("coord.session.create", who["user"], channel="coordinator")
     _SESSIONS[tok] = {"user": who["user"], "role": who.get("role"), "csrf": csrf, "exp": time.time() + SESSION_TTL}
-    response.set_cookie(COOKIE, tok, httponly=True, samesite="strict", max_age=SESSION_TTL, path="/v1/coordinator",
+    response.set_cookie(COOKIE, tok, httponly=True, samesite="strict", max_age=SESSION_TTL, path="/v1",
                         secure=os.environ.get("PATIENCE_COORD_SECURE_COOKIE") == "1")
     return {"user": who["user"], "csrf_token": csrf}
 
@@ -98,7 +98,7 @@ def logout(request: Request, response: Response, caller: dict = Depends(coord_ca
     tok = request.cookies.get(COOKIE)
     if tok:
         _SESSIONS.pop(tok, None)
-    response.delete_cookie(COOKIE, path="/v1/coordinator")
+    response.delete_cookie(COOKIE, path="/v1")
     return {"ok": True}
 
 
