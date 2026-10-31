@@ -231,6 +231,33 @@ def _status(state, req) -> str:
     return "pending"
 
 
+def approval_ttl() -> int:
+    return int(os.environ.get("PATIENCE_APPROVAL_TTL_SECONDS", "86400"))
+
+
+def _approval_expired(req: dict) -> bool:
+    from datetime import datetime, timezone
+    at = (req.get("decided") or {}).get("at")
+    ttl = approval_ttl()
+    if not at or ttl <= 0:
+        return False if ttl <= 0 else True  # no decision time recorded: fail closed
+    try:
+        t = datetime.fromisoformat(at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - t).total_seconds() > ttl
+
+
+def _self_approval(req: dict, who: dict) -> bool:
+    if os.environ.get("PATIENCE_ALLOW_SELF_APPROVAL") == "1":
+        return False
+    u = (who.get("user") or "").strip().lower()
+    ident = str(req.get("identity") or "").strip().lower()
+    return bool(u) and ident in (u, f"user:{u}")
+
+
 def _map(decision: str, allowed: bool, duplicate: bool) -> str:
     if decision == "research":
         return "clarify"         # evidence is thin: caller should add context or a human must approve
@@ -359,6 +386,9 @@ def decide_request(rid: str, approve: bool, who: dict, reason: str = "", via: st
         raise HTTPException(409, "This request was allowed and needs no approval.")
     if _status(p.state, req) != "pending":
         raise HTTPException(409, "Request already decided.")
+    if approve and _self_approval(req, who):
+        audit.append("approval.self_rejected", who["user"], request_id=rid, via=via)
+        raise HTTPException(403, "Approvers cannot approve their own requests.")
     if expect_hash is not None and not hmac.compare_digest(expect_hash, request_hash(req)):
         raise HTTPException(409, "Request changed since the link was issued.")
     decisions.decide(p, req["approval_key"], approve, who, reason, via, request_id=rid)
@@ -428,6 +458,14 @@ def execute(body: ExecuteIn, caller: dict = Depends(require_caller)):
                 raise HTTPException(403, "Request was denied.")
             if st == "approved" and req.get("approved_args_hash") != h:
                 raise HTTPException(409, "Approval was granted for different args; a new approval is required.")
+            if st == "approved":
+                # one human approval runs at most once, even if duplicates were deferred onto its key
+                used = [r for r in p.state.requests.values() if r.get("approval_key") == req["approval_key"]
+                        and r["request_id"] != req["request_id"] and (r.get("execution") or {}).get("status")]
+                if used:
+                    raise HTTPException(409, "This approval was already used by another request. Submit a new request.")
+                if _approval_expired(req):
+                    raise HTTPException(409, "Approval expired before execution; a new approval is required.")
             if st not in ("allowed", "approved"):
                 return JSONResponse(status_code=202, content={
                     "status": "pending_approval", "request_id": req["request_id"], "approval_key": req["approval_key"]})
