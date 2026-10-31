@@ -22,3 +22,6 @@ patience_audit.jsonl.head
 policy.yaml
 policies/*.bak
 *.egg-info/
+*.db
+*.db-wal
+*.db-shm

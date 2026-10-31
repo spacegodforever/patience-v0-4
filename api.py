@@ -627,7 +627,14 @@ async def link_submit(token: str, request: Request):
     return _page("Done", f"<p>Request <b>{_html.escape(out['status'])}</b> by {_html.escape(who['user'])}.</p>")
 
 
+
+# Memory foundation (ADR 0011, Proposed): records, devices, capability registry.
+from memory_foundation.routes import build_router as _mf_router  # noqa: E402
+app.include_router(_mf_router(require_caller, require_approver, _check_impl, CheckIn))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host=os.environ.get("PATIENCE_API_HOST", "127.0.0.1"),
                 port=int(os.environ.get("PATIENCE_API_PORT", "8765")))
+
