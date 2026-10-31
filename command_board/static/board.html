@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Oracle + PATIENCE Command Board</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0c0f14; --panel:#151a22; --text:#f4f7fb; --muted:#9aa5b1; --line:#26303d; --accent:#d6b45f; --danger:#ff6b6b; --blue:#7fb3ff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; background: var(--bg); color: var(--text); }
+    header { padding: 28px 32px; border-bottom: 1px solid var(--line); background: linear-gradient(135deg, #111722, #0c0f14); }
+    h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -0.03em; }
+    p { margin: 0; color: var(--muted); line-height: 1.5; }
+    main { padding: 24px 32px 48px; }
+    .top { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; box-shadow: 0 12px 40px rgba(0,0,0,.18); }
+    .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .09em; margin-bottom: 8px; }
+    .value { font-size: 20px; font-weight: 700; }
+    .lanes { display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 16px; align-items: start; }
+    @media (max-width: 1100px) { .lanes { grid-template-columns: repeat(2, minmax(220px, 1fr)); } }
+    @media (max-width: 680px) { header, main { padding-left: 18px; padding-right: 18px; } .lanes { grid-template-columns: 1fr; } }
+    .lane-title { display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px; }
+    .lane-title h2 { margin:0; font-size: 16px; text-transform: uppercase; letter-spacing: .08em; }
+    .count { color: var(--muted); font-size: 13px; }
+    .card { border: 1px solid var(--line); background: #10151d; border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+    .meta { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+    .pill { font-size: 11px; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+    .critical { color: var(--danger); border-color: rgba(255,107,107,.45); }
+    .high { color: #ffba7a; border-color: rgba(255,186,122,.45); }
+    .medium { color: var(--accent); border-color: rgba(214,180,95,.45); }
+    .low { color: var(--blue); border-color: rgba(127,179,255,.45); }
+    .card h3 { margin: 0 0 8px; font-size: 15px; }
+    .card p { font-size: 13px; }
+    .action { color: var(--text); margin-top: 10px; }
+    ul { margin: 10px 0 0 18px; padding:0; color: var(--muted); font-size: 13px; }
+    button { background: var(--accent); border: 0; color: #15110a; font-weight: 800; border-radius: 10px; padding: 10px 14px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Oracle + PATIENCE Command Board</h1>
+    <p>Oracle interprets. PATIENCE governs timing, consent, audit, and grounded action. v0.6 tracks customer impact, enterprise controls, and innovation risk.</p>
+    <p id="advisory" class="pill medium">Advisory only: these scores and lanes are recommendations. They never replace the PATIENCE gate or a human approval.</p>
+  </header>
+  <form id="login" style="display:none;padding:16px 32px" onsubmit="login(event)">
+    <input id="u" placeholder="approver" autocomplete="username"> <input id="p" type="password" placeholder="password" autocomplete="current-password">
+    <button type="submit">Sign in</button> <span id="loginMsg"></span>
+  </form>
+  <main>
+    <div class="top">
+      <section class="panel"><div class="label">Operating posture</div><div class="value" id="posture">Loading…</div></section>
+      <section class="panel"><div class="label">72-hour mandate</div><div id="mandate"></div></section>
+      <section class="panel"><div class="label">Readiness</div><div class="value" id="readiness">Loading…</div><p id="gate"></p></section>
+      <section class="panel"><div class="label">Customer/control modality</div><div class="value" id="modality">Loading…</div><p id="modalitySummary"></p><br><button onclick="loadAll()">Refresh command board</button></section>
+    </div>
+    <div class="lanes" id="lanes"></div>
+  </main>
+<script>
+const laneNames = { contain: 'Contain', act_now: 'Act Now', prepare: 'Prepare', watch: 'Watch' };
+const API = '/v1/board';
+async function fetchJson(url){
+  const r = await fetch(API + url, {credentials: 'same-origin'});
+  if (r.status === 401 || r.status === 403) { document.getElementById('login').style.display = 'block'; throw new Error('Sign in with your PATIENCE approver account.'); }
+  if(!r.ok) throw new Error(url + ' failed'); return r.json(); }
+async function login(ev){
+  ev.preventDefault();
+  const r = await fetch('/v1/coordinator/session', {method: 'POST', credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({user: document.getElementById('u').value, password: document.getElementById('p').value})});
+  document.getElementById('p').value = '';
+  if (!r.ok) { document.getElementById('loginMsg').textContent = 'Sign-in failed.'; return; }
+  document.getElementById('login').style.display = 'none'; loadAll().catch(err => { document.getElementById('posture').textContent = err.message; });
+}
+function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function renderCard(card){
+  const evidence = (card.evidence_required || []).slice(0,3).map(x => `<li>${esc(x)}</li>`).join('');
+  return `<article class="card">
+    <div class="meta"><span class="pill ${esc(card.priority)}">${esc(card.priority)}</span><span class="pill">${esc(card.domain)}</span><span class="pill">${esc(card.owner)}</span></div>
+    <h3>${esc(card.title)}</h3>
+    <p>${esc(card.reason)}</p>
+    <p class="action"><strong>Action:</strong> ${esc(card.action)}</p>
+    ${evidence ? `<ul>${evidence}</ul>` : ''}
+  </article>`;
+}
+async function loadAll(){
+  const [board, ready, cc] = await Promise.all([fetchJson('/command/act-now'), fetchJson('/command/evolution-readiness'), fetchJson('/command/customer-control')]);
+  document.getElementById('posture').textContent = board.operating_posture;
+  document.getElementById('readiness').textContent = `${ready.readiness_score} / 100 — ${ready.phase}`;
+  document.getElementById('gate').textContent = ready.next_gate;
+  document.getElementById('modality').textContent = `${cc.enterprise_modality_score} / 100`;
+  document.getElementById('modalitySummary').textContent = cc.board_summary;
+  document.getElementById('mandate').innerHTML = '<ul>' + board.seventy_two_hour_mandate.map(x => `<li>${esc(x.action)}</li>`).join('') + '</ul>';
+  document.getElementById('lanes').innerHTML = Object.keys(laneNames).map(lane => {
+    const cards = board.lanes[lane] || [];
+    return `<section class="panel"><div class="lane-title"><h2>${laneNames[lane]}</h2><span class="count">${cards.length}</span></div>${cards.map(renderCard).join('') || '<p>No items.</p>'}</section>`;
+  }).join('');
+}
+loadAll().catch(err => { document.getElementById('posture').textContent = err.message; });
+</script>
+<p><a href="/v1/board/command/risk-ground-truth" target="_blank">Open Risk Ground Truth</a></p>
+</body>
+</html>
