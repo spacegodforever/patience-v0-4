@@ -12,3 +12,4 @@ Format: Nygard-style (Context, Decision, Consequences). 0001-0009 are backfilled
 - [0008 Single-process JSON state with file lock](0008-single-process-file-state.md) (Accepted (v0.5))
 - [0009 Coordinator is preview-only and routes through the gate](0009-coordinator-preview-only.md) (Accepted on branch feat/coordinator)
 - [0010 Durable, schema-validated ingestion and off-host audit replication](0010-durable-ingestion-and-offhost-audit.md) (Proposed)
+- [0011 Distributed local-first memory, device identity, graduated autonomy](0011-distributed-local-first-memory.md) (Proposed; was "ADR 003" in Experimental)

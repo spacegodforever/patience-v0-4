@@ -22,3 +22,6 @@ Sizes: S <= 1 day, M 2-4 days, L 1-2 weeks. Fixes first, then capabilities.
 | C5 | Move JSON state into the same DB; enable multiple API replicas (prerequisite for HA) | L | concurrent processes never double-execute (multi-process test) |
 | C6 | Gateway enforcement aids: startup check warning if tool credentials are visible to agent configs; documented egress templates (A1) | M | check flags a test env with SMTP creds in agent env |
 | C7 | Coordinator UI: preview submission form, approval status view; frontend tests | M | Vitest/Playwright: preview shows `needs_approval`, never "executed" |
+
+## Memory foundation (ADR 0011), after F1-F6
+See `design/memory-foundation.md` for M1-M7. M1 (schema + migrations, record contract, device identity, permission registry with audited grants and revokes) is implemented on local branch `feat/memory-foundation`, size M, proven by `tests/test_memory_foundation.py` (28 tests).

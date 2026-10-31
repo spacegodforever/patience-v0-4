@@ -18,5 +18,6 @@ Baseline on `v0.6-security-fixes`: 276 passed. `feat/coordinator`: 300. `fix/app
 | Stripe executor | `test_v06_stripe.py` |
 | Packaging/Docker | `test_v06_packaging.py` |
 | Coordinator auth, CSRF, audit fail-closed, gate routing, LLM labelling [branch] | `test_coordinator.py` |
+| Memory contract fail-closed, migrations, devices, autonomy registry, level 4 still gated [branch] | `test_memory_foundation.py` |
 
 Gaps (no test today): concurrent approve/deny, audit replication, lockout-DoS behaviour, approval-load metrics, ingestion (not built).
