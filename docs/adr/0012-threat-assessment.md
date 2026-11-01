@@ -16,8 +16,8 @@ On 2026-11-01 Matthew encountered **new2026.pro**, a fake crypto casino:
 - **Advance-fee pattern:** the user reported that it demanded a deposit or fee before any withdrawal.
 - **Brand impersonation:** the user reported unauthorized Crypto.com and Trust Wallet logos.
 - **Action taken:** a human-approved abuse report went to Dynadot (abuse@dynadot.com). Reports to
-  Cloudflare and Google Safe Browsing were started through their web forms; at the time this ADR was
-  written they had not been confirmed as submitted.
+  Cloudflare (abuse form, Phishing & Malware) and Google Safe Browsing were also submitted on
+  2026-11-01 with the user's approval; both forms showed a success confirmation. Outcomes are pending.
 
 Building the scam-triage demo exposed a governance gap. The default policy **auto-allowed a
 single-recipient `send_email`** (`max_recipients: 9`), so an agent could have emailed a third party in
