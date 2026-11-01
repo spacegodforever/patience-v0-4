@@ -30,9 +30,9 @@ Run: `python -m demos.scam_triage` · Tests: `pytest tests/test_demo_scam_triage
 6. **Audit** verifies (append-only, tamper-evident hash chain); editing a record is detected.
 
 ## Caveats
-- **Policy gap found:** the default policy auto-allows a `send_email` with one recipient. The demo uses
-  dedicated tool names (`send_abuse_report_email`, `submit_web_form`) which are unknown to the policy
-  and therefore held by the fail-closed default — not by an explicit "external report" rule.
-  A test pins the current `send_email` behavior so a policy fix will be noticed.
+- **Policy gap found and fixed:** the default policy used to auto-allow a one-recipient `send_email`.
+  `fix/outbound-requires-approval` makes all outbound communication (email, messages, posts, web forms,
+  abuse reports) always need approval via `outbound_categories`. The registrar report now uses the
+  stock `send_email` tool and is held by that explicit rule; a test pins it.
 - Signals for content are the user's claims, unverified. Weights are arbitrary demo values.
 - Nothing is actually reported by this demo; real reports were handled separately by a human.

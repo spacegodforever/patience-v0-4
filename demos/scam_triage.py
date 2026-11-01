@@ -67,7 +67,7 @@ def report_previews(case: dict, a: dict) -> list:
     base = {"domain": d, "risk_score": a["risk"]["score"], "evidence": facts, "simulated": True,
             "reporter": "Matthew McGuire"}
     return [
-        {"tool": "send_abuse_report_email", "args": {**base, "channel": "registrar_abuse_email", "to": rd["abuse_email"],
+        {"tool": "send_email", "args": {**base, "channel": "registrar_abuse_email", "to": rd["abuse_email"], "recipients": [rd["abuse_email"]],
                                         "subject": f"Abuse report: {d}, fraudulent casino / advance-fee scam"}},
         {"tool": "submit_web_form", "args": {**base, "channel": "cloudflare_abuse",
                                              "form": "Cloudflare abuse report (phishing & malware)"}},

@@ -121,15 +121,14 @@ def test_approve_requires_approver_login(tmp_path, monkeypatch, no_network):
     _cleanup()
 
 
-def test_policy_gap_stock_send_email_single_recipient_is_auto_allowed(tmp_path, monkeypatch, no_network):
-    """Documents a real gap: the default policy auto-allows a 1-recipient send_email.
-    The demo therefore uses a dedicated tool name that fails closed. If policy changes, update this test."""
+def test_stock_send_email_single_recipient_needs_approval(tmp_path, monkeypatch, no_network):
+    """Was auto-allowed before fix/outbound-requires-approval; outbound mail is now always gated."""
     _clear(monkeypatch)
     st.setup_env(tmp_path)
     from fastapi.testclient import TestClient
     import api, identity
     key = identity.add_agent("triage-agent")
     d = TestClient(api.app).post("/v1/check", headers={"Authorization": f"Bearer {key}"},
-                                 json={"tool": "send_email", "args": {"to": "abuse@dynadot.com", "subject": "x"}}).json()
-    assert d["decision"] == "allow"
+                                 json={"tool": "send_email", "args": {"recipients": ["abuse@dynadot.com"], "subject": "x"}}).json()
+    assert d["decision"] == "needs_approval"
     _cleanup()
