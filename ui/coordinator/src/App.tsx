@@ -5,10 +5,20 @@ import { Activity, BrainCircuit, CircleDot, Compass, Database, Gauge, Orbit, Plu
 
 const API = '/v1/coordinator';
 let CSRF = sessionStorage.getItem('patience_csrf') || '';
-async function call(path:string, method='GET', body?:unknown){
+let CSRF_FROM_SESSION = sessionStorage.getItem('patience_csrf_src') === 'session';
+// Dev-open mode has no login, so fetch a double-submit token (also sets the patience_coord_csrf cookie).
+async function ensureCsrf(force=false){
+  if (CSRF && !force) return;
+  const r = await fetch(API+'/csrf',{credentials:'same-origin'});
+  if (!r.ok) throw new Error(r.status===401?'auth':`HTTP ${r.status}`);
+  CSRF=(await r.json()).csrf_token; CSRF_FROM_SESSION=false;
+  sessionStorage.setItem('patience_csrf',CSRF); sessionStorage.setItem('patience_csrf_src','dev');
+}
+async function call(path:string, method='GET', body?:unknown, retried=false):Promise<any>{
   const headers:Record<string,string> = {};
-  if (method !== 'GET') { headers['Content-Type']='application/json'; headers['X-CSRF-Token']=CSRF; }
+  if (method !== 'GET') { await ensureCsrf(); headers['Content-Type']='application/json'; headers['X-CSRF-Token']=CSRF; }
   const r = await fetch(API+path,{method,headers,credentials:'same-origin',body:body===undefined?undefined:JSON.stringify(body)});
+  if (r.status===403 && method!=='GET' && !retried && !CSRF_FROM_SESSION) { await ensureCsrf(true); return call(path,method,body,true); }
   if (r.status===401||r.status===403) throw new Error('auth');
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
@@ -16,7 +26,8 @@ async function call(path:string, method='GET', body?:unknown){
 async function login(user:string,password:string){
   const r = await fetch(API+'/session',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({user,password})});
   if(!r.ok) throw new Error('Login failed');
-  CSRF=(await r.json()).csrf_token; sessionStorage.setItem('patience_csrf',CSRF);
+  CSRF=(await r.json()).csrf_token; CSRF_FROM_SESSION=true;
+  sessionStorage.setItem('patience_csrf',CSRF); sessionStorage.setItem('patience_csrf_src','session');
 }
 type Project = {id:number; name:string; status:string; priority:string; next_step:string; created_at:string};
 type Event = {id:number; kind:string; title:string; detail:string; source:string; created_at:string};
