@@ -17,7 +17,9 @@ def _isolate(tmp_path, monkeypatch):
               "PATIENCE_NOTIFY_EMAIL_TO", "STRIPE_API_KEY", "PATIENCE_STRIPE_API_KEY", "PATIENCE_STRIPE_ALLOW_LIVE"):
         monkeypatch.delenv(v, raising=False)
     import approvers
+    monkeypatch.setenv("PATIENCE_THROTTLE_PATH", str(tmp_path / "throttle.json"))
     approvers._FAILS.clear()
+    approvers._LOADED["path"] = None
     import api as _api
     getattr(_api, "_IP_FAILS", {}).clear()
     # pre-v0.6 tests use open dev mode; fail-closed tests unset this explicitly

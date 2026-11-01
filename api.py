@@ -119,8 +119,17 @@ def _ip_locked(ip: str) -> bool:
     return _IP_FAILS.get((ip, "lock"), 0) > time.time()
 
 
+IP_MAX_ENTRIES = 10000
+
+
 def _ip_fail(ip: str):
     now = time.time()
+    if len(_IP_FAILS) >= IP_MAX_ENTRIES and ip not in _IP_FAILS:  # bound memory: drop stale entries
+        for k in [k for k, v in _IP_FAILS.items() if (isinstance(v, list) and (not v or now - v[-1] >= IP_WINDOW_S))
+                  or (not isinstance(v, list) and v <= now)]:
+            _IP_FAILS.pop(k, None)
+        while len(_IP_FAILS) >= IP_MAX_ENTRIES:
+            _IP_FAILS.pop(next(iter(_IP_FAILS)))
     hits = [t for t in _IP_FAILS.get(ip, []) if now - t < IP_WINDOW_S] + [now]
     _IP_FAILS[ip] = hits
     if len(hits) >= IP_MAX_FAILS:
@@ -129,7 +138,7 @@ def _ip_fail(ip: str):
 
 
 def _auth_locked(ip: str, user: str) -> bool:
-    return _ip_locked(ip) or approvers._throttled((user or "").strip())
+    return _ip_locked(ip) or approvers._throttled((user or "").strip(), ip)
 
 
 def require_approver(request: Request, authorization: Optional[str] = Header(None),
@@ -141,7 +150,7 @@ def require_approver(request: Request, authorization: Optional[str] = Header(Non
         if _auth_locked(ip, creds[0]):
             audit.append("auth.locked", creds[0][:100], channel="api")
             raise HTTPException(429, "Too many failed attempts; try again later.")
-        who = approvers.verify_password(*creds)
+        who = approvers.verify_password(creds[0], creds[1], ip)
         if who:
             return who
         _ip_fail(ip)
@@ -606,8 +615,8 @@ async def link_submit(token: str, request: Request):
     if _auth_locked(ip, user):
         audit.append("auth.locked", user, channel="link", request_id=req["request_id"])
         return _page("Too many attempts", "<p>Too many failed attempts. Try again later.</p>", 429)
-    who = approvers.verify_password(user, form["password"]) if form.get("password") else (
-        approvers.verify_pin(user, form["pin"]) if form.get("pin") else None)
+    who = approvers.verify_password(user, form["password"], ip) if form.get("password") else (
+        approvers.verify_pin(user, form["pin"], ip) if form.get("pin") else None)
     if not who:
         _ip_fail(ip)
         audit.append("auth.failed", user, channel="link", request_id=req["request_id"])
