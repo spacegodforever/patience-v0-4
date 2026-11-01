@@ -10,7 +10,12 @@ log off-box for that, see README).
     python audit.py verify        exit 0 if intact, 1 if not
     python audit.py tail [N]
 
-Env: PATIENCE_AUDIT_PATH (default patience_audit.jsonl)
+A checkpoint {"seq", "hash"} of the newest record is also kept in a second location
+(PATIENCE_AUDIT_CHECKPOINT, default ~/.patience/audit-checkpoints/<id>.json). verify()
+fails if the log or head has gone missing, or the log is shorter than / disagrees with
+the checkpoint. This raises the bar; it does not make the log immutable.
+
+Env: PATIENCE_AUDIT_PATH (default patience_audit.jsonl), PATIENCE_AUDIT_CHECKPOINT
 """
 from __future__ import annotations
 import hashlib
@@ -31,6 +36,36 @@ def path() -> Path:
 
 def _head(p: Path) -> Path:
     return p.with_name(p.name + ".head")
+
+
+def checkpoint_path(p: Optional[Path] = None) -> Path:
+    env = os.environ.get("PATIENCE_AUDIT_CHECKPOINT")
+    if env:
+        return Path(env)
+    p = p or path()
+    ident = hashlib.sha256(str(p.resolve()).encode()).hexdigest()[:16]
+    return Path.home() / ".patience" / "audit-checkpoints" / f"{ident}.json"
+
+
+def _atomic_write(target: Path, text: str) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, target)
+
+
+def _read_checkpoint(p: Path) -> Optional[dict]:
+    cp = checkpoint_path(p)
+    if not cp.exists():
+        return None
+    try:
+        d = json.loads(cp.read_text(encoding="utf-8"))
+        return {"seq": int(d["seq"]), "hash": str(d["hash"])}
+    except Exception:
+        return {"seq": -1, "hash": ""}  # unreadable checkpoint is itself a failure
 
 
 def _digest(rec: dict) -> str:
@@ -63,7 +98,11 @@ def append(event: str, actor: Optional[str] = None, **data: Any) -> dict:
             f.write(line)
             f.flush()
             os.fsync(f.fileno())
-        _head(p).write_text(rec["hash"], encoding="utf-8")
+        _atomic_write(_head(p), rec["hash"])
+        try:
+            _atomic_write(checkpoint_path(p), json.dumps({"seq": rec["seq"], "hash": rec["hash"], "log": str(p.resolve())}))
+        except OSError:
+            pass  # second copy is best effort; the head file is still written
     return rec
 
 
@@ -83,10 +122,16 @@ def read(limit: Optional[int] = None) -> list:
 def verify() -> dict:
     """{"ok": bool, "records": n, "error": str|None, "bad_seq": int|None}"""
     p = path()
+    cp = _read_checkpoint(p)
+    h = _head(p)
     if not p.exists():
-        ok = not _head(p).exists()
+        if cp is not None and cp["seq"] != 0:
+            return {"ok": False, "records": 0, "error": "log missing but a checkpoint of a previous head exists",
+                    "bad_seq": None}
+        ok = not h.exists()
         return {"ok": ok, "records": 0, "error": None if ok else "log missing but head exists", "bad_seq": None}
     prev, n = GENESIS, 0
+    hashes = {}
     for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
         try:
             rec = json.loads(line)
@@ -99,9 +144,19 @@ def verify() -> dict:
         if _digest(rec) != rec.get("hash"):
             return {"ok": False, "records": n, "error": f"line {i}: record modified (hash mismatch)", "bad_seq": i}
         prev, n = rec["hash"], i
-    h = _head(p)
+        hashes[i] = prev
     if h.exists() and h.read_text(encoding="utf-8").strip() != prev:
         return {"ok": False, "records": n, "error": "log truncated or head file altered", "bad_seq": None}
+    if not h.exists() and n > 0 and cp is not None:
+        return {"ok": False, "records": n, "error": "head file missing", "bad_seq": None}
+    if cp is not None:
+        if cp["seq"] < 0:
+            return {"ok": False, "records": n, "error": "checkpoint unreadable", "bad_seq": None}
+        if cp["seq"] > n:
+            return {"ok": False, "records": n, "error": f"log shorter than checkpoint (seq {cp['seq']})",
+                    "bad_seq": None}
+        if cp["seq"] and hashes.get(cp["seq"]) != cp["hash"]:
+            return {"ok": False, "records": n, "error": "log disagrees with checkpoint", "bad_seq": cp["seq"]}
     return {"ok": True, "records": n, "error": None, "bad_seq": None}
 
 
