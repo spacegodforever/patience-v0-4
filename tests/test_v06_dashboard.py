@@ -21,7 +21,7 @@ def env(tmp_path, monkeypatch):
     key = identity.add_agent("a1")
     c = TestClient(api.app)
     h = {"Authorization": f"Bearer {key}"}
-    rids = [c.post("/v1/check", headers=h, json={"tool": "refund", "args": {"amount": 5000 + i, "order": f"A{i}"}}).json()["request_id"]
+    rids = [c.post("/v1/check", headers=h, json={"tool": "refund", "args": {"amount": 500 + i, "order": f"A{i}"}}).json()["request_id"]
             for i in range(3)]
     c.post("/v1/check", headers=h, json={"action": "look up the weather"})
     yield api, rids, pol

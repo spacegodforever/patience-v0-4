@@ -9,7 +9,7 @@ APPR = {"X-Approver-Token": "appr"}
 
 def _long_args(tail):
     # identical first 400+ chars of the JSON label, different payload afterwards
-    return {"amount": 5000, "a_note": "x" * 450, "zz_destination": tail}
+    return {"amount": 500, "a_note": "x" * 450, "zz_destination": tail}
 
 
 # ---- fix 1: duplicates compared by full args hash; approval bound per request ----
@@ -36,7 +36,7 @@ def test_truncated_label_collision_does_not_share_approval(env):
 def test_identical_payload_still_deduplicated(env):
     c, keys, _, _ = env
     k = keys["alice"]
-    body = {"tool": "refund", "args": {"amount": 5000, "order": "A-9"}}
+    body = {"tool": "refund", "args": {"amount": 500, "order": "A-9"}}
     assert c.post("/v1/check", headers=H(k), json=body).json()["decision"] == "needs_approval"
     assert c.post("/v1/check", headers=H(k), json=body).json()["decision"] == "defer"
 
@@ -66,7 +66,7 @@ def test_basic_auth_locks_out_user_with_429(env):
     c, keys, _, _ = env
     import approvers
     approvers.add("carol", "carol-password-12", pin="123456")
-    rid = c.post("/v1/check", headers=H(keys["alice"]), json={"tool": "refund", "args": {"amount": 5000}}).json()["request_id"]
+    rid = c.post("/v1/check", headers=H(keys["alice"]), json={"tool": "refund", "args": {"amount": 500}}).json()["request_id"]
     for _ in range(approvers.MAX_FAILS):
         assert c.post(f"/v1/requests/{rid}/approve", headers=_basic("carol", "wrong")).status_code == 403
     # correct password is now refused while locked
@@ -76,7 +76,7 @@ def test_basic_auth_locks_out_user_with_429(env):
 def test_per_ip_limit_across_usernames(env):
     c, keys, _, _ = env
     import api
-    rid = c.post("/v1/check", headers=H(keys["alice"]), json={"tool": "refund", "args": {"amount": 5000}}).json()["request_id"]
+    rid = c.post("/v1/check", headers=H(keys["alice"]), json={"tool": "refund", "args": {"amount": 500}}).json()["request_id"]
     for i in range(api.IP_MAX_FAILS):
         c.post(f"/v1/requests/{rid}/approve", headers=_basic(f"user{i}", "wrong"))
     assert c.post(f"/v1/requests/{rid}/approve", headers=_basic("someone-new", "x")).status_code == 429
@@ -86,7 +86,7 @@ def test_link_pin_lockout(env):
     c, keys, _, _ = env
     import approvers, links, api
     approvers.add("dave", "dave-password-12", pin="654321")
-    rid = c.post("/v1/check", headers=H(keys["alice"]), json={"tool": "refund", "args": {"amount": 5000}}).json()["request_id"]
+    rid = c.post("/v1/check", headers=H(keys["alice"]), json={"tool": "refund", "args": {"amount": 500}}).json()["request_id"]
     p = api._engine()
     req = p.state.requests[rid]
     tok = links.make(req["request_id"], "approve", api.request_hash(req))

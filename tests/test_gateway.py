@@ -27,7 +27,7 @@ def H(k):
     return {"Authorization": f"Bearer {k}"}
 
 
-RISKY = {"tool": "refund", "args": {"amount": 5000, "order": "A-1001", "reason": "damaged"}}
+RISKY = {"tool": "refund", "args": {"amount": 500, "order": "A-1001", "reason": "damaged"}}
 SAFE = {"tool": "search_docs", "args": {"query": "refund policy"}}
 
 
@@ -72,6 +72,9 @@ def test_budget_per_identity_text_checks(env, monkeypatch):
         d = c.post("/v1/check", headers=a, json={"action": f"issue refund of $500 for order {i}"}).json()
         assert "budget_exceeded" not in d["risk_categories"], d
         assert c.post(f"/v1/requests/{d['request_id']}/approve", headers=APPR).status_code == 200
+        # C3: counted only once the agent reports it executed
+        assert c.post(f"/v1/requests/{d['request_id']}/outcome", headers=a,
+                      json={"outcome": "executed"}).status_code == 200
     d = c.post("/v1/check", headers=a, json={"action": "issue refund of $500 for order 9"}).json()
     assert "budget_exceeded" in d["risk_categories"], d
     # bob's identity has its own budget

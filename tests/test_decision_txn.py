@@ -11,7 +11,7 @@ def _basic(u, p):
 
 
 def _risky(c, key):
-    r = c.post("/v1/check", headers=H(key), json={"tool": "refund", "args": {"amount": 5000}})
+    r = c.post("/v1/check", headers=H(key), json={"tool": "refund", "args": {"amount": 500}})
     assert r.json()["decision"] == "needs_approval"
     return r.json()["request_id"]
 

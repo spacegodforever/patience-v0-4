@@ -159,8 +159,8 @@ tools:
   grant_access: {category: account_permissions}
   export_data: {category: pii_sensitive}
 
-# Rolling per-requester budgets (split-action evasion). Usage is recorded for
-# every allowed or approved call; a call that would push the window total past
+# Rolling per-requester budgets (split-action evasion). Usage is recorded only for
+# executed calls (see C3 note at the end of this file); a call that would push the window total past
 # max needs approval even when it is small on its own.
 # Budgets are keyed on the authenticated agent identity (agents.yaml), never on caller-supplied text.
 # "text" = free-text /v1/check calls and trigger_worker proposals (quantities parsed from the text).
@@ -173,3 +173,34 @@ limits:
 # Optional LLM second opinion (needs PATIENCE_LLM_API_KEY; off with PATIENCE_LLM_SECOND_OPINION=0).
 # It can only add a needs_approval, never remove one.
 second_opinion: {enabled: true}
+
+# C2: risk tiers. A request's tier is the highest tier of its categories (no category = low).
+# Tiers never relax a decision: they only choose the approval workflow for requests that
+# already need approval. low = may be batch-approved; medium/high = one approver;
+# critical = two distinct human approvers, never the requesting agent.
+risk_tiers:
+  unknown_category: high          # a category not listed here
+  categories:
+    llm_disagreement: low
+    communication: medium
+    public_publishing: medium
+    unknown_side_effect: medium
+    mass_communication: high
+    money: high
+    deploy: high
+    pii_sensitive: high
+    legal: high
+    budget_exceeded: high
+    deletion: critical
+    account_permissions: critical
+    security: critical
+    injection: critical
+  escalate:
+    critical_amount: 1000         # money with amount_total >= this is critical
+    critical_recipients: 500      # communication to >= this many recipients is critical
+    critical_count: 100           # count (e.g. records) >= this with any side-effect category is critical
+
+# C3: budgets count only executed actions (gateway execution, an agent outcome report, or an
+# allowed text check, which the agent is told to perform). Denied, pending, failed and dry-run
+# calls never count; an outcome report of not_executed refunds an allowed check.
+
