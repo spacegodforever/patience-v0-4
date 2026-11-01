@@ -102,14 +102,8 @@ def _ensure_loaded():
 
 def _persist():
     import json
-    import tempfile
-    p = throttle_path()
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".throttle.")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(_FAILS, f)
-        os.replace(tmp, p)
+        write_secret(throttle_path(), json.dumps(_FAILS))  # F5 helper: 0600, atomic, temp cleaned up
     except OSError:
         pass  # persistence is best effort; the in-memory throttle still applies
 
