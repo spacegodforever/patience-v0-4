@@ -10,14 +10,18 @@ def _isolate(tmp_path, monkeypatch):
     """Every test gets its own audit log / approvers file; no test touches repo-local files.
     Pre-v0.6 tests use the shared approver token, which now needs the explicit legacy flag."""
     monkeypatch.setenv("PATIENCE_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv("PATIENCE_AUDIT_CHECKPOINT", str(tmp_path / "checkpoints" / "audit.checkpoint.json"))
     monkeypatch.setenv("PATIENCE_APPROVERS", str(tmp_path / "approvers.yaml"))
     monkeypatch.setenv("PATIENCE_LEGACY_APPROVER_TOKEN", "1")
     monkeypatch.setenv("PATIENCE_LINK_SECRET", "test-link-secret-0123456789abcdef")
-    for v in ("PATIENCE_EXECUTE_LIVE", "PATIENCE_NOTIFY_SLACK_WEBHOOK", "PATIENCE_NOTIFY_WEBHOOK_URL",
+    for v in ("PATIENCE_AUDIT_REPLICA_DIR", "PATIENCE_AUDIT_SIGNING_KEY", "PATIENCE_AUDIT_VERIFY_KEY",
+              "PATIENCE_AUDIT_REPLICA_REQUIRED", "PATIENCE_EXECUTE_LIVE", "PATIENCE_NOTIFY_SLACK_WEBHOOK", "PATIENCE_NOTIFY_WEBHOOK_URL",
               "PATIENCE_NOTIFY_EMAIL_TO", "STRIPE_API_KEY", "PATIENCE_STRIPE_API_KEY", "PATIENCE_STRIPE_ALLOW_LIVE"):
         monkeypatch.delenv(v, raising=False)
     import approvers
+    monkeypatch.setenv("PATIENCE_THROTTLE_PATH", str(tmp_path / "throttle.json"))
     approvers._FAILS.clear()
+    approvers._LOADED["path"] = None
     import api as _api
     getattr(_api, "_IP_FAILS", {}).clear()
     # pre-v0.6 tests use open dev mode; fail-closed tests unset this explicitly

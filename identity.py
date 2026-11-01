@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 import yaml
+from securefile import write_secret
 
 
 def agents_path() -> Path:
@@ -66,9 +67,7 @@ def resolve(key: Optional[str]) -> Optional[dict]:
 
 def _write(agents: dict):
     p = agents_path()
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(yaml.safe_dump({"agents": agents}, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, p)
+    write_secret(p, yaml.safe_dump({"agents": agents}, sort_keys=True))
 
 
 def add_agent(name: str, industry: Optional[str] = None) -> str:
