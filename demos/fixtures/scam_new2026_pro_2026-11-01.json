@@ -1,0 +1,38 @@
+{
+  "snapshot_date": "2026-11-01",
+  "supplied_by": "Fixed snapshot: RDAP fields recorded 2026-11-01 plus the user's own report. The demo never contacts the site or any RDAP server.",
+  "as_of": "2026-11-01T00:00:00Z",
+  "cases": [
+    {
+      "id": "new2026.pro", "synthetic": false, "domain": "new2026.pro",
+      "rdap": {"registrar": "Dynadot Inc", "abuse_email": "abuse@dynadot.com", "abuse_phone": "+1.6502620100",
+               "registered": "2026-10-27T14:15:19Z", "last_changed": "2026-11-01",
+               "status": ["client transfer prohibited"],
+               "nameservers": ["riya.ns.cloudflare.com", "hayes.ns.cloudflare.com"]},
+      "content": {"source": "user_report", "page_capture": false,
+                  "claims": {"category": "online casino", "deposit_to_withdraw_demand": true,
+                             "brands_shown": ["Crypto.com", "Trust Wallet"], "brands_authorized": false,
+                             "license_disclosed": null}}
+    },
+    {
+      "id": "control-a", "synthetic": true, "label": "SYNTHETIC legitimate-operator control (fictional)",
+      "domain": "casino-control-a.example",
+      "rdap": {"registrar": "Example Registrar", "abuse_email": "abuse@registrar.example", "abuse_phone": null,
+               "registered": "2012-03-14T00:00:00Z", "last_changed": "2026-06-01",
+               "status": ["client transfer prohibited"], "nameservers": ["ns1.hosting.example"]},
+      "content": {"source": "synthetic", "page_capture": false,
+                  "claims": {"category": "online casino", "deposit_to_withdraw_demand": false,
+                             "brands_shown": [], "brands_authorized": null, "license_disclosed": "Example Gaming Authority #0001 (fictional)"}}
+    },
+    {
+      "id": "control-b", "synthetic": true, "label": "SYNTHETIC legitimate-operator control (fictional)",
+      "domain": "games-control-b.example.org",
+      "rdap": {"registrar": "Example Registrar", "abuse_email": "abuse@registrar.example", "abuse_phone": null,
+               "registered": "2018-09-02T00:00:00Z", "last_changed": "2025-11-20",
+               "status": [], "nameservers": ["ns1.cloudflare.example", "ns2.cloudflare.example"]},
+      "content": {"source": "synthetic", "page_capture": false,
+                  "claims": {"category": "online casino", "deposit_to_withdraw_demand": false,
+                             "brands_shown": ["Visa"], "brands_authorized": true, "license_disclosed": "Example Gaming Authority #0002 (fictional)"}}
+    }
+  ]
+}
