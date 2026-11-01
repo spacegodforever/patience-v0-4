@@ -627,6 +627,28 @@ async def link_submit(token: str, request: Request):
     return _page("Done", f"<p>Request <b>{_html.escape(out['status'])}</b> by {_html.escape(who['user'])}.</p>")
 
 
+# ---- coordinator (merged from PATIENCE Experimental) ----
+from coordinator.routes import router as _coord_router  # noqa: E402
+app.include_router(_coord_router)
+_COORD_UI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui", "coordinator", "dist")
+if os.path.isdir(_COORD_UI):  # built UI served same-origin, so no CORS is needed
+    from fastapi.staticfiles import StaticFiles  # noqa: E402
+    app.mount("/coordinator", StaticFiles(directory=_COORD_UI, html=True), name="coordinator-ui")
+
+
+# ---- command board (merged Oracle + PATIENCE Command Board; advisory only) ----
+from command_board.routes import router as _board_router  # noqa: E402
+from fastapi.responses import FileResponse as _FileResponse  # noqa: E402
+
+app.include_router(_board_router)
+_BOARD_HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "command_board", "static", "board.html")
+
+
+@app.get("/board", include_in_schema=False)
+def board_page():
+    """Static page only (no data); it fetches /v1/board/* with the session cookie."""
+    return _FileResponse(_BOARD_HTML, media_type="text/html")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host=os.environ.get("PATIENCE_API_HOST", "127.0.0.1"),
