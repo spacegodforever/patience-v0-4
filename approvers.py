@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 from typing import Optional
 import yaml
+from securefile import write_secret
 
 ROLES = ("approver", "admin")
 _N, _R, _P = 2 ** 14, 8, 1
@@ -74,11 +75,7 @@ def configured() -> bool:
 
 def _save(accts: dict):
     p = approvers_path()
-    p.write_text(yaml.safe_dump({"approvers": accts}, sort_keys=True), encoding="utf-8")
-    try:
-        os.chmod(p, 0o600)
-    except OSError:
-        pass
+    write_secret(p, yaml.safe_dump({"approvers": accts}, sort_keys=True))
 
 
 def throttle_path() -> Path:
