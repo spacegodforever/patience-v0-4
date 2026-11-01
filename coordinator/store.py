@@ -5,7 +5,10 @@ append fails the transaction is rolled back and AuditUnavailable is raised (fail
 Env: PATIENCE_COORD_DB (default patience_coordinator.db, git-ignored).
 """
 from __future__ import annotations
+import hashlib
+import hmac
 import json
+import time
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -40,6 +43,9 @@ CREATE TABLE IF NOT EXISTS previews(
   request_id TEXT NOT NULL, tool TEXT, args_hash TEXT, decision TEXT NOT NULL,
   preview TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS ix_events_id ON events(id);
+CREATE TABLE IF NOT EXISTS sessions(
+  token_sha256 TEXT PRIMARY KEY, user TEXT NOT NULL, role TEXT, csrf_sha256 TEXT NOT NULL,
+  exp REAL NOT NULL, created_at TEXT NOT NULL);
 """
 
 
@@ -152,3 +158,58 @@ def add_preview(project_id, req, source, actor):
                f"request {req['request_id']} -> {req['decision']}", source)
         row = _row(c, "previews", cur.lastrowid)
     return row
+
+
+# ---------- browser sessions (only SHA-256 of token and CSRF are stored) ----------
+def _h(v: str) -> str:
+    return hashlib.sha256(v.encode()).hexdigest()
+
+
+def session_create(token: str, csrf: str, user: str, role, exp: float) -> None:
+    c = connect()
+    try:
+        c.execute("DELETE FROM sessions WHERE exp < ?", (time.time(),))
+        c.execute("INSERT INTO sessions VALUES(?,?,?,?,?,?)",
+                  (_h(token), user, role, _h(csrf), exp, now_iso()))
+        c.commit()
+    finally:
+        c.close()
+
+
+def session_get(token: str):
+    if not token:
+        return None
+    c = connect()
+    try:
+        r = c.execute("SELECT * FROM sessions WHERE token_sha256=?", (_h(token),)).fetchone()
+        if r and r["exp"] < time.time():
+            c.execute("DELETE FROM sessions WHERE token_sha256=?", (_h(token),))
+            c.commit()
+            return None
+        return dict(r) if r else None
+    finally:
+        c.close()
+
+
+def session_delete(token: str) -> None:
+    if not token:
+        return
+    c = connect()
+    try:
+        c.execute("DELETE FROM sessions WHERE token_sha256=?", (_h(token),))
+        c.commit()
+    finally:
+        c.close()
+
+
+def session_csrf_ok(sess: dict, csrf) -> bool:
+    return bool(csrf) and hmac.compare_digest(_h(csrf), sess["csrf_sha256"])
+
+
+def sessions_clear() -> None:
+    c = connect()
+    try:
+        c.execute("DELETE FROM sessions")
+        c.commit()
+    finally:
+        c.close()

@@ -2,7 +2,10 @@
 
 Auth: either the normal API caller (api.require_caller: agent key / API token / dev-open), or a
 local browser session created from an approvers.yaml account. Sessions use an HttpOnly,
-SameSite=Strict cookie; every mutating request on a session must carry X-CSRF-Token.
+SameSite=Strict cookie; sessions are persisted hashed in the coordinator DB and rotated on
+login. Every mutating request on a session must carry X-CSRF-Token. In dev-open mode a
+mutating request must also carry X-CSRF-Token matching the patience_coord_csrf cookie
+(double-submit; fetch one from GET /v1/coordinator/csrf).
 Identity and `source` are always derived server-side from the authenticated caller.
 """
 from __future__ import annotations
@@ -18,7 +21,7 @@ from . import llm, policy, store
 router = APIRouter(prefix="/v1/coordinator", tags=["coordinator"])
 COOKIE = "patience_coord_session"
 SESSION_TTL = int(os.environ.get("PATIENCE_COORD_SESSION_TTL", "28800"))
-_SESSIONS: Dict[str, dict] = {}
+CSRF_COOKIE = "patience_coord_csrf"
 MUTATING = {"POST", "PATCH", "PUT", "DELETE"}
 
 
@@ -28,19 +31,14 @@ def _api():
 
 
 def _session(request: Request) -> Optional[dict]:
-    tok = request.cookies.get(COOKIE)
-    s = _SESSIONS.get(tok or "")
-    if s and s["exp"] < time.time():
-        _SESSIONS.pop(tok, None)
-        return None
-    return s
+    return store.session_get(request.cookies.get(COOKIE) or "")
 
 
 def coord_caller(request: Request, authorization: Optional[str] = Header(None),
                  x_csrf_token: Optional[str] = Header(None)) -> dict:
     s = _session(request)
     if s:
-        if request.method in MUTATING and not (x_csrf_token and hmac.compare_digest(x_csrf_token, s["csrf"])):
+        if request.method in MUTATING and not store.session_csrf_ok(s, x_csrf_token):
             raise HTTPException(403, "CSRF token missing or invalid.")
         return {"id": f"user:{s['user']}", "mode": "session", "user": s["user"]}
     if request.cookies.get(COOKIE) and not authorization:
@@ -49,6 +47,10 @@ def coord_caller(request: Request, authorization: Optional[str] = Header(None),
     if (caller["mode"] == "dev" and request.method in MUTATING
             and not (request.headers.get("content-type") or "").startswith("application/json")):
         raise HTTPException(415, "JSON body required.")
+    if caller["mode"] == "dev" and request.method in MUTATING:
+        ck = request.cookies.get(CSRF_COOKIE)
+        if not (ck and x_csrf_token and hmac.compare_digest(ck, x_csrf_token)):
+            raise HTTPException(403, "CSRF token missing or invalid (dev mode).")
     return caller
 
 
@@ -85,9 +87,10 @@ def login(body: LoginIn, request: Request, response: Response):
         a._ip_fail(ip)
         audit.append("auth.failed", body.user[:100], channel="coordinator")
         raise HTTPException(403, "Invalid credentials.")
+    store.session_delete(request.cookies.get(COOKIE) or "")  # rotate: any prior session is dropped
     tok, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
     audit.append("coord.session.create", who["user"], channel="coordinator")
-    _SESSIONS[tok] = {"user": who["user"], "role": who.get("role"), "csrf": csrf, "exp": time.time() + SESSION_TTL}
+    store.session_create(tok, csrf, who["user"], who.get("role"), time.time() + SESSION_TTL)
     response.set_cookie(COOKIE, tok, httponly=True, samesite="strict", max_age=SESSION_TTL, path="/v1/coordinator",
                         secure=os.environ.get("PATIENCE_COORD_SECURE_COOKIE") == "1")
     return {"user": who["user"], "csrf_token": csrf}
@@ -96,10 +99,17 @@ def login(body: LoginIn, request: Request, response: Response):
 @router.delete("/session")
 def logout(request: Request, response: Response, caller: dict = Depends(coord_caller)):
     tok = request.cookies.get(COOKIE)
-    if tok:
-        _SESSIONS.pop(tok, None)
+    store.session_delete(tok or "")
     response.delete_cookie(COOKIE, path="/v1/coordinator")
     return {"ok": True}
+
+
+@router.get("/csrf")
+def csrf_token(response: Response, caller: dict = Depends(coord_caller)):
+    tok = secrets.token_urlsafe(32)
+    response.set_cookie(CSRF_COOKIE, tok, httponly=False, samesite="strict", path="/v1/coordinator",
+                        secure=os.environ.get("PATIENCE_COORD_SECURE_COOKIE") == "1")
+    return {"csrf_token": tok}
 
 
 # ---------- read ----------

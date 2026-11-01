@@ -13,7 +13,7 @@ def _db(tmp_path, monkeypatch):
     monkeypatch.setenv("PATIENCE_COORD_DB", str(tmp_path / "coord.db"))
     monkeypatch.delenv("PATIENCE_OLLAMA_MODEL", raising=False)
     from coordinator import routes
-    routes._SESSIONS.clear()
+    routes.store.sessions_clear()
 
 
 @pytest.fixture
@@ -25,7 +25,10 @@ def dev(tmp_path, monkeypatch):
     monkeypatch.delenv("PATIENCE_API_TOKEN", raising=False)
     import api
     from executors.mock import MockExecutor
-    return TestClient(api.app), MockExecutor.reset()
+    c = TestClient(api.app)
+    # F6: dev-open mutations need a double-submit CSRF token
+    c.headers["X-CSRF-Token"] = c.get(P + "/csrf").json()["csrf_token"]
+    return c, MockExecutor.reset()
 
 
 # ---- store ----
