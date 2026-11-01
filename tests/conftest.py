@@ -14,7 +14,8 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setenv("PATIENCE_APPROVERS", str(tmp_path / "approvers.yaml"))
     monkeypatch.setenv("PATIENCE_LEGACY_APPROVER_TOKEN", "1")
     monkeypatch.setenv("PATIENCE_LINK_SECRET", "test-link-secret-0123456789abcdef")
-    for v in ("PATIENCE_EXECUTE_LIVE", "PATIENCE_NOTIFY_SLACK_WEBHOOK", "PATIENCE_NOTIFY_WEBHOOK_URL",
+    for v in ("PATIENCE_AUDIT_REPLICA_DIR", "PATIENCE_AUDIT_SIGNING_KEY", "PATIENCE_AUDIT_VERIFY_KEY",
+              "PATIENCE_AUDIT_REPLICA_REQUIRED", "PATIENCE_EXECUTE_LIVE", "PATIENCE_NOTIFY_SLACK_WEBHOOK", "PATIENCE_NOTIFY_WEBHOOK_URL",
               "PATIENCE_NOTIFY_EMAIL_TO", "STRIPE_API_KEY", "PATIENCE_STRIPE_API_KEY", "PATIENCE_STRIPE_ALLOW_LIVE"):
         monkeypatch.delenv(v, raising=False)
     import approvers

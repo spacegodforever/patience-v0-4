@@ -15,6 +15,8 @@ A checkpoint {"seq", "hash"} of the newest record is also kept in a second locat
 fails if the log or head has gone missing, or the log is shorter than / disagrees with
 the checkpoint. This raises the bar; it does not make the log immutable.
 
+Off-host replication with signed checkpoints: see audit_replica.py.
+
 Env: PATIENCE_AUDIT_PATH (default patience_audit.jsonl), PATIENCE_AUDIT_CHECKPOINT
 """
 from __future__ import annotations
@@ -103,6 +105,8 @@ def append(event: str, actor: Optional[str] = None, **data: Any) -> dict:
             _atomic_write(checkpoint_path(p), json.dumps({"seq": rec["seq"], "hash": rec["hash"], "log": str(p.resolve())}))
         except OSError:
             pass  # second copy is best effort; the head file is still written
+        import audit_replica  # C1: off-host copy + signed checkpoint (no-op without a sink)
+        audit_replica.replicate(rec, line)
     return rec
 
 
