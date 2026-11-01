@@ -51,3 +51,19 @@ Use per-approver accounts in `approvers.yaml`.
 ## Known limits
 * Approver identity is a local username/password/PIN; it is not yet independently verified (no SSO/IdP).
 * Single API process: state, locks and throttles are per process; do not scale the api service.
+
+
+## Outbound communication always needs approval
+
+Since `fix/outbound-requires-approval`, the default policy declares
+`outbound_categories: [communication, mass_communication, public_publishing, outbound_report]`.
+Any tool in those categories (`send_email` including a single recipient, `send_message`,
+`send_sms`, `send_dm`, `reply_email`, `forward_email`, `post_message`, `slack_post_message`,
+`post`, `publish`, `submit_web_form`, `submit_abuse_report`, `send_abuse_report_email`)
+gets `needs_approval`; an `auto_allow` on such a tool is ignored. This is a deterministic
+category rule in `risk_policy.score_tool`, not name-matching. Outbound tools not listed in the
+policy still fail closed as `unknown_side_effect`. If a custom policy omits the key, the code
+defaults to `communication`, `mass_communication`, `public_publishing`.
+
+Previously `send_email`/`send_message` auto-allowed up to 9 recipients. That is gone; the
+`messages_per_hour` budget remains but only counts approved sends.

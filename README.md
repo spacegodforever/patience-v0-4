@@ -277,7 +277,7 @@ Text is normalized before it is scored:
 POST /v1/check {"tool": "refund", "args": {"amount": 50, "count": 3}}   # identity comes from the bearer key
 ```
 
-`send_email` and `send_message` read the `recipients` list or count. `refund`, `charge` and `transfer` read the amount × count. `delete_records`, `publish`, `deploy`, `grant_access` and `export_data` always need approval. Unknown tools need approval. Tools whose names start with `get_`, `list_`, `search_`, `draft_` and similar are allowed. String args are also scanned for injection, PII, security and legal terms. Free-text `action` remains supported as a fallback, and sending both scores the union of the two.
+Outbound communication on the user's behalf (`send_email`, `send_message`, SMS/DM, `post_message`, `post`, `publish`, `submit_web_form`, abuse reports) **always needs approval**, even for one recipient; see `outbound_categories` in `policies/default.yaml`. `send_email` and `send_message` read the `recipients` list or count (10+ is mass communication). `refund`, `charge` and `transfer` read the amount × count. `delete_records`, `publish`, `deploy`, `grant_access` and `export_data` always need approval. Unknown tools need approval. Tools whose names start with `get_`, `list_`, `search_`, `draft_` and similar are allowed. String args are also scanned for injection, PII, security and legal terms. Free-text `action` remains supported as a fallback, and sending both scores the union of the two.
 
 ### Rolling budgets
 
