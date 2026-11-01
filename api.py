@@ -25,7 +25,7 @@ import contextlib
 import json
 import os
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import base64
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
@@ -36,6 +36,7 @@ import identity
 import executors
 import approvers
 import audit
+from transaction import AuditFailed, audited, state_txn
 import decisions
 import previews
 import links
@@ -54,6 +55,11 @@ async def _lifespan(_app):
 
 
 app = FastAPI(title="PATIENCE", version=VERSION, lifespan=_lifespan)
+
+@app.exception_handler(AuditFailed)
+async def _audit_failed(request: Request, exc: AuditFailed):
+    return JSONResponse(status_code=503, content={"detail": f"Refused: {exc}. No change was committed."})
+
 
 
 def _state_path() -> str:
@@ -119,8 +125,17 @@ def _ip_locked(ip: str) -> bool:
     return _IP_FAILS.get((ip, "lock"), 0) > time.time()
 
 
+IP_MAX_ENTRIES = 10000
+
+
 def _ip_fail(ip: str):
     now = time.time()
+    if len(_IP_FAILS) >= IP_MAX_ENTRIES and ip not in _IP_FAILS:  # bound memory: drop stale entries
+        for k in [k for k, v in _IP_FAILS.items() if (isinstance(v, list) and (not v or now - v[-1] >= IP_WINDOW_S))
+                  or (not isinstance(v, list) and v <= now)]:
+            _IP_FAILS.pop(k, None)
+        while len(_IP_FAILS) >= IP_MAX_ENTRIES:
+            _IP_FAILS.pop(next(iter(_IP_FAILS)))
     hits = [t for t in _IP_FAILS.get(ip, []) if now - t < IP_WINDOW_S] + [now]
     _IP_FAILS[ip] = hits
     if len(hits) >= IP_MAX_FAILS:
@@ -129,7 +144,7 @@ def _ip_fail(ip: str):
 
 
 def _auth_locked(ip: str, user: str) -> bool:
-    return _ip_locked(ip) or approvers._throttled((user or "").strip())
+    return _ip_locked(ip) or approvers._throttled((user or "").strip(), ip)
 
 
 def require_approver(request: Request, authorization: Optional[str] = Header(None),
@@ -141,7 +156,7 @@ def require_approver(request: Request, authorization: Optional[str] = Header(Non
         if _auth_locked(ip, creds[0]):
             audit.append("auth.locked", creds[0][:100], channel="api")
             raise HTTPException(429, "Too many failed attempts; try again later.")
-        who = approvers.verify_password(*creds)
+        who = approvers.verify_password(creds[0], creds[1], ip)
         if who:
             return who
         _ip_fail(ip)
@@ -249,7 +264,7 @@ def health():
                     "dev_open" if dev_open() else "not_configured_fail_closed"))}
 
 
-def _check_impl(body: CheckIn, caller: dict) -> dict:
+def _check_impl(body: CheckIn, caller: dict, gateway: bool = False) -> dict:
     if body.requester and caller["mode"] == "agent" and body.requester != caller["id"]:
         raise HTTPException(400, "requester is derived from your API key; do not send a different one.")
     who = caller["id"]  # caller-supplied requester is never used for identity or budgets
@@ -270,7 +285,8 @@ def _check_impl(body: CheckIn, caller: dict) -> dict:
             tool_risk = _merge(tool_risk, {**t, "reasons": []})
     rules_cats = (tool_risk or {}).get("categories") if body.tool else risk_policy.classify(text, tags)["categories"]
     llm = second_opinion_risk(text, tags, rules_cats)  # outside the lock; None without a key
-    with p.memory_store.locked():
+    rid = str(uuid.uuid4())
+    with state_txn(p):  # F3: request is committed only together with its audit record
         p.refresh()
         extra = _merge(tool_risk, llm)
         cur_hash = args_hash(tool_name, body.args) if body.tool else None
@@ -280,9 +296,9 @@ def _check_impl(body: CheckIn, caller: dict) -> dict:
                         and r.get("identity", who) == who
                         and _status(p.state, r) == "pending"]
         out = p._cycle_unlocked(text, source=f"api:{who}", reliability=.9, tags=tags, extra_risk=extra,
-                                identity=who, tool=tool_name or None, usage=usage)
+                                identity=who, tool=tool_name or None, usage=usage,
+                                count_on_allow=not gateway, request_id=rid)
         d, v, a = out["decision"], out["verification"], out["assessment"]
-        rid = str(uuid.uuid4())
         decision = _map(d["action"], v["verified"], bool(pending_same))
         if decision == "defer":
             # don't stack duplicate approvals; point the caller at the existing one
@@ -305,6 +321,8 @@ def _check_impl(body: CheckIn, caller: dict) -> dict:
             "preview": previews.preview(tool_name or None, body.args if body.tool else None,
                                         " ".join(x for x in (body.action,) if x) or None, cats),
             "requires_authorization": d["requires_authorization"] or not v["verified"],
+            "risk_tier": risk_policy.risk_tier(cats, v.get("usage") or usage or risk_policy.text_usage(text, cats)),
+            "budget_usage": v.get("usage"), "usage_counted": bool(v.get("usage_counted")),
             "created_at": now_iso(),
         }
         if decision == "clarify":
@@ -315,10 +333,11 @@ def _check_impl(body: CheckIn, caller: dict) -> dict:
             req["reason"] = f"Same action already awaiting approval (request {pending_same[0]['request_id']})."
         p.state.requests[rid] = req
         p.memory_store.save(p.state)
+        audited("check", who, request_id=rid, decision=decision, risk_tier=req["risk_tier"],
+                tool=req["tool"], args_hash=req["args_hash"],
+                action=action_desc[:300], risk_categories=cats, flags=req["flags"])
     if decision in ("needs_approval", "clarify"):
-        req["alerts"] = notify.alert(req, request_hash(req))  # network I/O outside the state lock
-    audit.append("check", who, request_id=rid, decision=decision, tool=req["tool"], args_hash=req["args_hash"],
-                 action=action_desc[:300], risk_categories=cats, flags=req["flags"])
+        req["alerts"] = notify.alert(req, request_hash(req))  # network I/O outside the state lock, after audit
     return req
 
 
@@ -326,7 +345,7 @@ def _check_impl(body: CheckIn, caller: dict) -> dict:
 def check(body: CheckIn, caller: dict = Depends(require_caller)):
     req = _check_impl(body, caller)
     return {k: req[k] for k in ("decision", "reason", "risk_categories", "irreversible", "flags", "details",
-                                "confidence", "request_id", "approval_key", "preview")}
+                                "confidence", "request_id", "approval_key", "preview", "risk_tier")}
 
 
 def _get(p: Patience, rid: str, caller: Optional[dict] = None):
@@ -344,7 +363,12 @@ def status(rid: str, caller: dict = Depends(require_caller)):
     return {"request_id": rid, "status": _status(p.state, req), "decision": req["decision"],
             "action": req["action"], "approval_key": req["approval_key"], "reason": req["reason"],
             "args_hash": req.get("args_hash"), "execution": req.get("execution"), "preview": req.get("preview"),
-            "decided": req.get("decided")}
+            "decided": req.get("decided"), "risk_tier": _tier(req),
+            "approvals": [x["approver"] for x in req.get("approvals", [])]}
+
+
+def _tier(req: dict) -> str:
+    return req.get("risk_tier") or risk_policy.risk_tier(req.get("risk_categories", []), req.get("budget_usage"))
 
 
 class DecideIn(BaseModel):
@@ -354,16 +378,62 @@ class DecideIn(BaseModel):
 def decide_request(rid: str, approve: bool, who: dict, reason: str = "", via: str = "api",
                    expect_hash: Optional[str] = None) -> dict:
     p = _engine()
-    req = _get(p, rid)
-    if not req["requires_authorization"]:
-        raise HTTPException(409, "This request was allowed and needs no approval.")
-    if _status(p.state, req) != "pending":
-        raise HTTPException(409, "Request already decided.")
-    if expect_hash is not None and not hmac.compare_digest(expect_hash, request_hash(req)):
-        raise HTTPException(409, "Request changed since the link was issued.")
-    decisions.decide(p, req["approval_key"], approve, who, reason, via, request_id=rid)
-    p.refresh()
-    return {"request_id": rid, "status": _status(p.state, p.state.requests[rid]), "approver": who["user"]}
+    # F3: status check and decision under one lock, so concurrent approve/deny yields exactly one decision
+    with p.memory_store.locked():
+        p.refresh()
+        req = _get(p, rid)
+        if not req["requires_authorization"]:
+            raise HTTPException(409, "This request was allowed and needs no approval.")
+        if _status(p.state, req) != "pending":
+            raise HTTPException(409, "Request already decided.")
+        if expect_hash is not None and not hmac.compare_digest(expect_hash, request_hash(req)):
+            raise HTTPException(409, "Request changed since the link was issued.")
+        try:
+            rec = decisions.decide(p, req["approval_key"], approve, who, reason, via, request_id=rid)
+        except decisions.DecisionError as e:
+            raise HTTPException(409, str(e))
+        p.refresh()
+    r = p.state.requests[rid]
+    out = {"request_id": rid, "status": _status(p.state, r), "approver": who["user"], "risk_tier": _tier(r)}
+    if rec["decision"] == "pending_second_approval":
+        out["decision"] = "pending_second_approval"
+        out["approvals"] = [x["approver"] for x in r.get("approvals", [])]
+    return out
+
+
+# Registered before /v1/requests/{rid}/approve so "batch" is never read as a request id.
+class BatchIn(BaseModel):
+    request_ids: List[str] = Field(..., min_length=1, max_length=100)
+    reason: Optional[str] = Field(None, max_length=1000)
+
+
+@app.post("/v1/requests/batch/approve")
+def batch_approve(body: BatchIn, who: dict = Depends(require_approver)):
+    """C2: approve several LOW-tier pending requests at once. All-or-nothing: if any id is unknown,
+    not pending, or above the low tier, nothing is approved."""
+    p = _engine()
+    ids = list(dict.fromkeys(body.request_ids))
+    with state_txn(p):
+        p.refresh()
+        problems = []
+        for rid in ids:
+            req = p.state.requests.get(rid)
+            if not req:
+                problems.append(f"{rid}: unknown")
+            elif not req["requires_authorization"] or _status(p.state, req) != "pending":
+                problems.append(f"{rid}: not pending")
+            elif _tier(req) != "low":
+                problems.append(f"{rid}: tier {_tier(req)} cannot be batch-approved")
+        if problems:
+            raise HTTPException(409, {"error": "batch refused; nothing approved", "problems": problems})
+        for rid in ids:
+            req = p.state.requests[rid]
+            if _status(p.state, req) == "pending":  # an earlier item may share the approval key
+                decisions.decide(p, req["approval_key"], True, who, body.reason or "batch approval (low tier)",
+                                 via="batch", request_id=rid)
+                p.refresh()
+        audited("approval.batch", who["user"], request_ids=ids, count=len(ids))
+    return {"approved": ids, "approver": who["user"]}
 
 
 # Approvals are a human action: only an approver account (or the explicit legacy token), never an agent key.
@@ -375,6 +445,42 @@ def approve(rid: str, body: Optional[DecideIn] = Body(None), who: dict = Depends
 @app.post("/v1/requests/{rid}/deny")
 def deny(rid: str, body: Optional[DecideIn] = Body(None), who: dict = Depends(require_approver)):
     return decide_request(rid, False, who, (body.reason if body else "") or "")
+
+
+class OutcomeIn(BaseModel):
+    outcome: str = Field(..., pattern="^(executed|not_executed)$")
+
+
+@app.post("/v1/requests/{rid}/outcome")
+def report_outcome(rid: str, body: OutcomeIn, caller: dict = Depends(require_caller)):
+    """C3: the agent reports whether it actually ran an allowed/approved check-mode request.
+    executed -> counted toward budgets (once); not_executed -> any usage for it is refunded."""
+    p = _engine()
+    with state_txn(p):
+        p.refresh()
+        req = _get(p, rid, caller)
+        if caller["mode"] == "agent" and req.get("identity") != caller["id"]:
+            raise HTTPException(404, "Unknown request_id.")
+        st = _status(p.state, req)
+        if (req.get("execution") or {}).get("status"):
+            raise HTTPException(409, "Gateway-executed requests are accounted automatically.")
+        if st not in ("allowed", "approved"):
+            raise HTTPException(409, f"Request is {st}; only allowed or approved requests can be reported.")
+        prev = req.get("outcome")
+        if prev and prev != body.outcome:
+            raise HTTPException(409, f"Outcome already reported as {prev}.")
+        if body.outcome == "executed" and not req.get("usage_counted"):
+            p._record_usage(req["identity"], req.get("tool") or "text",
+                            req.get("budget_usage") or {"calls": 1}, rid)
+            req["usage_counted"] = True
+        refunded = 0
+        if body.outcome == "not_executed" and req.get("usage_counted"):
+            refunded = p._refund_usage(rid)
+            req["usage_counted"] = False
+        req["outcome"] = body.outcome
+        p.memory_store.save(p.state)
+        audited("request.outcome", caller["id"], request_id=rid, outcome=body.outcome, refunded=refunded)
+    return {"request_id": rid, "outcome": body.outcome, "usage_counted": req["usage_counted"]}
 
 
 # --------------------------------------------------------------------------
@@ -432,7 +538,7 @@ def execute(body: ExecuteIn, caller: dict = Depends(require_caller)):
                 return JSONResponse(status_code=202, content={
                     "status": "pending_approval", "request_id": req["request_id"], "approval_key": req["approval_key"]})
     if not body.request_id:
-        req = _check_impl(CheckIn(tool=tool, args=body.args, context=body.context), caller)
+        req = _check_impl(CheckIn(tool=tool, args=body.args, context=body.context), caller, gateway=True)
         if req["decision"] != "allow":
             return JSONResponse(status_code=202, content={
                 "status": "pending_approval", "decision": req["decision"], "request_id": req["request_id"],
@@ -477,6 +583,9 @@ def execute(body: ExecuteIn, caller: dict = Depends(require_caller)):
                     "executed_at": now_iso()})
         req["execution"] = {"status": rec["status"], "idempotency_key": body.idempotency_key,
                             "executed_at": rec["executed_at"]}
+        if error is None and not req.get("usage_counted"):  # C3: only executed calls consume budget
+            p._record_usage(caller["id"], tool, req.get("budget_usage") or {**(req.get("usage") or {}), "calls": 1}, rid)
+            req["usage_counted"] = True
         p.memory_store.save(p.state)
     audit.append("execute." + rec["status"], caller["id"], request_id=rid, tool=tool, args_hash=h,
                  idempotency_key=body.idempotency_key, error=error)
@@ -606,8 +715,8 @@ async def link_submit(token: str, request: Request):
     if _auth_locked(ip, user):
         audit.append("auth.locked", user, channel="link", request_id=req["request_id"])
         return _page("Too many attempts", "<p>Too many failed attempts. Try again later.</p>", 429)
-    who = approvers.verify_password(user, form["password"]) if form.get("password") else (
-        approvers.verify_pin(user, form["pin"]) if form.get("pin") else None)
+    who = approvers.verify_password(user, form["password"], ip) if form.get("password") else (
+        approvers.verify_pin(user, form["pin"], ip) if form.get("pin") else None)
     if not who:
         _ip_fail(ip)
         audit.append("auth.failed", user, channel="link", request_id=req["request_id"])

@@ -23,7 +23,7 @@ def c(tmp_path, monkeypatch):
 
 def risky(client, key):
     r = client.post("/v1/check", headers={"Authorization": f"Bearer {key}"},
-                    json={"tool": "refund", "args": {"amount": 5000, "order": "A1"}})
+                    json={"tool": "refund", "args": {"amount": 500, "order": "A1"}})
     assert r.json()["decision"] == "needs_approval"
     return r.json()
 
@@ -40,7 +40,7 @@ def link_tokens(rid):
 def test_check_returns_preview(c):
     client, key, _ = c
     body = risky(client, key)
-    assert body["preview"]["summary"].startswith("Refund $5,000.00") and body["preview"]["amount_total"] == 5000
+    assert body["preview"]["summary"].startswith("Refund $500.00") and body["preview"]["amount_total"] == 500
 
 
 def test_preview_email_and_records():
@@ -99,7 +99,7 @@ def test_link_get_shows_preview_and_does_not_approve(c):
     rid = risky(client, key)["request_id"]
     t = link_tokens(rid)["approve"]
     r = client.get(f"/l/{t}")
-    assert r.status_code == 200 and "Refund $5,000.00" in r.text and r.headers["Referrer-Policy"] == "no-referrer"
+    assert r.status_code == 200 and "Refund $500.00" in r.text and r.headers["Referrer-Policy"] == "no-referrer"
     import api
     assert api._status(api._engine().state, api._engine().state.requests[rid]) == "pending"
 

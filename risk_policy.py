@@ -372,3 +372,31 @@ def text_usage(text: str, categories: Iterable[str]) -> dict:
         nums = [int(x) for x in re.findall(r"\b\d+\b", norm)]
         out["recipients"] = max(nums) if nums else (get_policy().mass if "mass_communication" in cats else 1)
     return out
+
+
+# C2: risk tiers -------------------------------------------------------------
+TIERS = ("low", "medium", "high", "critical")
+
+
+def risk_tier(categories: Iterable[str], usage: Optional[dict] = None, policy: Optional[Policy] = None) -> str:
+    """Highest tier among the categories (no category = low). Fail-safe: unknown -> high."""
+    p = policy or get_policy()
+    spec = p.raw.get("risk_tiers") or {}
+    cmap = spec.get("categories") or {}
+    unknown = spec.get("unknown_category", "high")
+    cats = list(categories or [])
+    rank = 0
+    for c in cats:
+        t = cmap.get(c, unknown)
+        rank = max(rank, TIERS.index(t) if t in TIERS else TIERS.index("high"))
+    u = usage or {}
+    esc = spec.get("escalate") or {}
+    if cats:
+        if "money" in cats and float(u.get("amount_total", 0) or 0) >= float(esc.get("critical_amount", 1e18)):
+            rank = 3
+        if set(cats) & {"communication", "mass_communication"} and \
+                float(u.get("recipients", 0) or 0) >= float(esc.get("critical_recipients", 1e18)):
+            rank = 3
+        if float(u.get("count", 0) or 0) >= float(esc.get("critical_count", 1e18)):
+            rank = 3
+    return TIERS[rank]

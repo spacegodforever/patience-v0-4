@@ -38,7 +38,8 @@ def test_check_demos(client, text, expected, tmp_path):
 
 def test_approve_flow(client, monkeypatch):
     monkeypatch.setenv("PATIENCE_APPROVER_TOKEN", "boss")
-    r = client.post("/v1/check", json={"action": DEMOS[3][0]}).json()
+    # high tier (single approver); critical items are covered in test_risk_tiers.py
+    r = client.post("/v1/check", json={"action": DEMOS[2][0]}).json()
     other = client.post("/v1/check", json={"action": DEMOS[4][0]}).json()
     rid = r["request_id"]
     assert client.post(f"/v1/requests/{rid}/approve").status_code == 403

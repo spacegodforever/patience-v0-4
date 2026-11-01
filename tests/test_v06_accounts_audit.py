@@ -25,7 +25,7 @@ def c(tmp_path, monkeypatch):
 
 def risky(c, key):
     r = c.post("/v1/check", headers={"Authorization": f"Bearer {key}"},
-               json={"tool": "refund", "args": {"amount": 5000, "order": "A1"}})
+               json={"tool": "refund", "args": {"amount": 500, "order": "A1"}})
     assert r.json()["decision"] == "needs_approval"
     return r.json()["request_id"]
 
@@ -113,7 +113,7 @@ def test_audit_chain_records_check_approve_execute(c, monkeypatch):
     from executors.mock import MockExecutor
     MockExecutor.reset()
     H = {"Authorization": f"Bearer {key}"}
-    body = {"tool": "refund", "args": {"amount": 5000, "order": "A1"}, "idempotency_key": "audit-key-1"}
+    body = {"tool": "refund", "args": {"amount": 500, "order": "A1"}, "idempotency_key": "audit-key-1"}
     rid = client.post("/v1/execute", headers=H, json=body).json()["request_id"]
     client.post(f"/v1/requests/{rid}/approve", headers=basic("bob", "bob-password-12"))
     assert client.post("/v1/execute", headers=H, json={**body, "idempotency_key": "audit-key-2",

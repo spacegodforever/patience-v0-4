@@ -57,9 +57,8 @@ class Patience:
             return False
         if action not in self.state.authorized_actions:
             self.state.authorized_actions.append(action)
-            pend = self.state.pending_usage.pop(action, None)
-            if pend:  # approved work counts toward the agent's rolling budget
-                self._record_usage(pend["identity"], pend["tool"], pend["usage"])
+            # C3: approval alone consumes no budget; usage is recorded when the call is executed
+            self.state.pending_usage.pop(action, None)
         self.state.blocked_actions = [x for x in self.state.blocked_actions if x != action]
         self.memory_store.save(self.state)
         return True
@@ -78,14 +77,23 @@ class Patience:
         return {"categories": ["budget_exceeded"], "consequence": .85, "irreversible": True,
                 "reasons": ["rolling budget: " + "; ".join(crossed)]}
 
-    def _record_usage(self, identity, tool, usage):
+    def _record_usage(self, identity, tool, usage, request_id=None):
+        """C3: called only for executed calls (and allowed text checks the agent was told to run)."""
         import risk_policy
         t = risk_policy.now()
         self.state.usage_log = risk_policy.prune_usage(self.state.usage_log, t)
-        self.state.usage_log.append({"requester": identity, "tool": tool, "ts": t, "usage": usage})
+        entry = {"requester": identity, "tool": tool, "ts": t, "usage": usage}
+        if request_id:
+            entry["request_id"] = request_id
+        self.state.usage_log.append(entry)
+
+    def _refund_usage(self, request_id):
+        before = len(self.state.usage_log)
+        self.state.usage_log = [e for e in self.state.usage_log if e.get("request_id") != request_id]
+        return before - len(self.state.usage_log)
 
     def _cycle_unlocked(self, content, source="user", reliability=.9, tags=(), extra_risk=None,
-                        identity=None, tool=None, usage=None):
+                        identity=None, tool=None, usage=None, count_on_allow=True, request_id=None):
         """extra_risk: optional {"categories": [...], "consequence": float, "irreversible": bool,
         "reasons": [...]} from tool-arg scoring, budgets, or the LLM second opinion. It can only
         ADD risk to the rules assessment, never remove it."""
@@ -137,9 +145,9 @@ class Patience:
         if not allowed and key not in self.state.blocked_actions:
             self.state.blocked_actions.append(key)
         if identity:
-            if allowed:
-                self._record_usage(identity, tool, usage)
-            else:  # counted only if a human approves it
+            if allowed and count_on_allow:  # gateway calls are counted when they actually execute
+                self._record_usage(identity, tool, usage, request_id)
+            elif not allowed:  # kept for reference; counted only once executed (C3)
                 self.state.pending_usage[key] = {"identity": identity, "tool": tool, "usage": usage}
 
         verification = {
@@ -149,6 +157,8 @@ class Patience:
             "risk_categories": assessment.risk_categories,
             "budget_reasons": (extra_risk or {}).get("reasons", []),
             "identity": identity,
+            "usage": usage if identity else None,
+            "usage_counted": bool(identity and allowed and count_on_allow),
             "expected_outcome": decision.checkpoint
         }
 

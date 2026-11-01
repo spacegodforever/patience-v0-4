@@ -109,7 +109,15 @@ def test_window_expiry(client, keys, monkeypatch):
 def test_approved_calls_count_against_budget(client, keys):
     r = chk(client, keys["bot-A"], tool="refund", args={"amount": 1900})
     assert r["decision"] == "needs_approval"
-    assert client.post(f"/v1/requests/{r['request_id']}/approve", headers={"X-Approver-Token": "appr"}).status_code == 200
+    # $1,900 is critical tier: two distinct named approvers (C2)
+    from twoperson import approve_critical
+    rid = r["request_id"]
+    assert approve_critical(client, rid).json()["status"] == "approved"
+    # C3: approval alone consumes no budget ...
+    assert chk(client, keys["bot-A"], tool="refund", args={"amount": 150})["decision"] == "allow"
+    # ... but once the agent reports the approved call as executed, it counts
+    hdr = {"Authorization": f"Bearer {keys['bot-A']}"}
+    assert client.post(f"/v1/requests/{rid}/outcome", headers=hdr, json={"outcome": "executed"}).status_code == 200
     r = chk(client, keys["bot-A"], tool="refund", args={"amount": 150})
     assert r["decision"] == "needs_approval" and "budget_exceeded" in r["flags"]
 
