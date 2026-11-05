@@ -479,3 +479,55 @@ def test_gate_text_mismatch_goes_critical_via_api_field():
 def _tiers_rank(t):
     import tiers
     return tiers.rank(t)
+
+
+# ---- claim nonces persisted in the shared SQLite store --------------------------------
+def test_claim_reuse_refused_across_workers(tmp_path, monkeypatch):
+    db = str(tmp_path / "shared.db")
+    h = payload_hash("code.open_pr", PR)
+    tok = claims.mint("dev_w", h)
+    claims.verify(tok, "dev_w", h, nonce_db=db)
+    claims._used.clear()  # simulate a different worker process: empty in-memory set
+    with pytest.raises(claims.ClaimError, match="already used"):
+        claims.verify(tok, "dev_w", h, nonce_db=db)
+
+
+def test_claim_nonce_store_concurrent_single_winner(tmp_path):
+    import threading
+    db = str(tmp_path / "shared.db")
+    h = payload_hash("code.open_pr", PR)
+    tok = claims.mint("dev_c", h)
+    wins, errs = [], []
+
+    def worker():
+        try:
+            claims._burn_shared(db, tok.split(".")[4], 2 ** 31, 0)
+            wins.append(1)
+        except claims.ClaimError:
+            errs.append(1)
+    ts = [threading.Thread(target=worker) for _ in range(8)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    assert len(wins) == 1 and len(errs) == 7
+
+
+def test_claim_nonce_store_unavailable_fails_closed(tmp_path):
+    h = payload_hash("code.open_pr", PR)
+    with pytest.raises(claims.ClaimError, match="unavailable"):
+        claims.verify(claims.mint("r", h), "r", h, nonce_db=str(tmp_path / "no" / "such" / "dir.db"))
+
+
+def test_gate_passes_shared_nonce_db_to_live_adapter(tmp_path):
+    from dev_governance.store import SqliteStore
+    seen = {}
+
+    class Spy(LiveFake):
+        def execute(self, action, payload, ctx):
+            seen.update(ctx)
+            return super().execute(action, payload, ctx)
+    db = str(tmp_path / "g.db")
+    g = DevGate(clock=Clock(), store=SqliteStore(db), adapters=[Spy()])
+    rid = _approved(g)
+    g.execute(rid, "code.open_pr", PR, "agent-1")
+    assert seen["claim_nonce_db"] == db
+    import sqlite3
+    assert sqlite3.connect(db).execute("SELECT COUNT(*) FROM dev_claim_nonces").fetchone()[0] == 1

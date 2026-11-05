@@ -7,7 +7,8 @@ expired, reused, forged, or mismatched token is refused. This makes the gate the
 constructing a live adapter and calling execute() directly does nothing without a fresh claim.
 
 Secret: PATIENCE_CLAIM_SECRET (>= 32 chars) or a random per-process secret (tokens then do not
-survive a restart, which is fine - they live seconds). Used nonces are kept in-process.
+survive a restart, which is fine - they live seconds). Used nonces are kept in-process AND, when the
+gate uses a SQLite store, in its shared `dev_claim_nonces` table so other workers cannot reuse them.
 """
 from __future__ import annotations
 import hashlib
@@ -84,7 +85,8 @@ def mint(rid: str, payload_hash: str, clock: Callable[[], float] = time.time,
     return f"v1.{rid}.{payload_hash}.{exp}.{nonce}.{_sig(rid, payload_hash, exp, nonce)}"
 
 
-def verify(token: str, rid: str, payload_hash: str, clock: Callable[[], float] = time.time) -> None:
+def verify(token: str, rid: str, payload_hash: str, clock: Callable[[], float] = time.time,
+           nonce_db: str | None = None) -> None:
     """Raise ClaimError unless token is valid for exactly this request + payload; consumes it."""
     if not token or not isinstance(token, str):
         raise ClaimError("missing execution claim token")
@@ -111,10 +113,33 @@ def verify(token: str, rid: str, payload_hash: str, clock: Callable[[], float] =
                 del _used[n]
         if nonce in _used:
             raise ClaimError("execution claim token already used")
+        if nonce_db:
+            _burn_shared(nonce_db, nonce, exp, now)  # raises if another worker already used it
         _used[nonce] = exp
+
+
+def _burn_shared(path: str, nonce: str, exp: int, now: float) -> None:
+    """Record a used nonce in the shared SQLite DB so no other worker/process can reuse it.
+    INSERT on a PRIMARY KEY is atomic across processes; a DB error fails closed."""
+    import sqlite3
+    try:
+        c = sqlite3.connect(path, timeout=30, isolation_level=None)
+        try:
+            c.execute("CREATE TABLE IF NOT EXISTS dev_claim_nonces (nonce TEXT PRIMARY KEY, exp REAL NOT NULL)")
+            c.execute("BEGIN IMMEDIATE")
+            c.execute("DELETE FROM dev_claim_nonces WHERE exp < ?", (now - 3600,))
+            c.execute("INSERT INTO dev_claim_nonces (nonce, exp) VALUES (?, ?)", (nonce, exp))
+            c.execute("COMMIT")
+        finally:
+            c.close()
+    except sqlite3.IntegrityError:
+        raise ClaimError("execution claim token already used")
+    except sqlite3.Error as e:
+        raise ClaimError(f"claim nonce store unavailable ({type(e).__name__}); refusing") from None
 
 
 def verify_claim(ctx: dict, payload_hash: str, clock: Callable[[], float] = time.time) -> None:
     """For live adapters: check ctx['claim_token'] against ctx['request_id'] and the payload hash
     the adapter computes itself from what it is about to send."""
-    verify((ctx or {}).get("claim_token"), (ctx or {}).get("request_id", ""), payload_hash, clock)
+    verify((ctx or {}).get("claim_token"), (ctx or {}).get("request_id", ""), payload_hash, clock,
+           nonce_db=(ctx or {}).get("claim_nonce_db") or os.environ.get("PATIENCE_CLAIM_NONCE_DB"))

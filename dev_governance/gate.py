@@ -297,7 +297,10 @@ class DevGate:
         audit.append("dev.execute.claimed", caller, request_id=rid, payload_hash=h)
         ctx = {"request_id": rid, "caller": caller}
         if getattr(ad, "live", False):  # RT-10: live adapters need a fresh single-use claim token
-            ctx["claim_token"] = _claims.mint(rid, h)  # real time: adapters verify against real time
+            ctx["claim_token"] = _claims.mint(rid, h)
+            spath = getattr(self.store, "path", None)
+            if spath and spath != ":memory:":
+                ctx["claim_nonce_db"] = spath  # shared across workers (used-nonce table)  # real time: adapters verify against real time
             ctx["payload_hash"] = h
         try:
             result = ad.execute(req["action"], json.loads(json.dumps(req["payload"])),
