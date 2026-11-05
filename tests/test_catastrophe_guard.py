@@ -351,3 +351,57 @@ def test_breaker_reset_via_api_requires_approver(monkeypatch):
     basic = {"Authorization": "Basic " + base64.b64encode(b"matthew:matthew-password-1").decode()}
     assert c.post("/v1/dev/breaker/bot/reset", headers=basic).status_code == 200
     assert c.get("/v1/dev/breaker/bot", headers=B).json()["frozen"] is False
+
+
+# ---- 5. advisory report ---------------------------------------------------------------
+from dev_governance import advisory
+from types import SimpleNamespace
+
+NOGUARD = SimpleNamespace(destructive=False, why=[], blast=None)
+FIELDS = {"what_could_go_wrong", "blast_radius", "reversibility", "rollback", "threat_floor",
+          "basis", "confidence", "unknowns"}
+
+
+def test_advisory_attached_when_approval_needed_with_all_fields():
+    g = DevGate(clock=Clock())
+    r = g.propose("db.drop", DROP, "bot")
+    adv = r["advisory"]
+    assert FIELDS <= adv.keys()
+    assert adv["threat_floor"] == "critical" and adv["reversibility"].startswith("irreversible")
+    assert adv["rollback"] == SAFE["rollback_plan"]
+    assert g.status(r["request_id"])["advisory"] == adv
+
+
+def test_no_advisory_on_auto_allowed_low():
+    assert DevGate(clock=Clock()).propose("ci.run", {}, "bot")["advisory"] is None
+
+
+def test_advisory_is_deterministic():
+    a = advisory.build("code.merge_pr", PR, "high", True, NOGUARD)
+    b = advisory.build("code.merge_pr", dict(PR), "high", True, NOGUARD)
+    assert a == b
+
+
+def test_advisory_never_lowers_tier():
+    adv = advisory.build("code.merge_pr", PR, "critical", True, NOGUARD)  # rule says revert-able
+    assert adv["threat_floor"] == "critical"
+
+
+def test_advisory_raises_tier_for_partially_reversible():
+    adv = advisory.build("infra.apply", {"environment": "staging"}, "medium", True, NOGUARD)
+    assert adv["threat_floor"] == "high"
+
+
+def test_gate_applies_advisory_raise(monkeypatch):
+    g = DevGate(clock=Clock())
+    monkeypatch.setitem(advisory._RISKS, "code.open_pr", (["x"], "irreversible (test)"))
+    r = g.propose("code.open_pr", PR, "bot")
+    assert r["tier"] == "critical" and any("advisory raised" in x for x in r["reasons"])
+    assert r["approvals_required"] >= 2
+
+
+def test_advisory_labels_unknowns_and_confidence():
+    adv = advisory.build("mystery.op", {}, "high", False, NOGUARD)
+    assert any("not in policy" in u for u in adv["unknowns"])
+    assert any("blast radius" in u for u in adv["unknowns"])
+    assert adv["confidence"] == "low" and adv["blast_radius"] == "unknown"

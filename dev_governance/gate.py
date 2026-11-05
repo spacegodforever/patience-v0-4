@@ -15,6 +15,7 @@ import audit
 from .policy import DevPolicy, load_policy
 from .adapters import Adapter, default_adapters
 from . import claims as _claims
+from . import advisory as _advisory
 from . import destructive as _destructive
 from . import breaker as _breaker
 import tiers as _tiers
@@ -123,6 +124,13 @@ class DevGate:
             a.approvals_required = max(a.approvals_required, guard.min_approvals,
                                        _tiers.approvals_required("critical", self.policy.required_overrides))
             a.reasons = a.reasons + [f"destructive: {w}" for w in guard.why]
+        adv = _advisory.build(action, stored, a.tier, a.known, guard, None)
+        raised = _tiers.raise_only(a.tier, adv["threat_floor"])
+        if raised != a.tier:
+            a.reasons = a.reasons + [f"advisory raised tier {a.tier}->{raised}"]
+            a.tier = raised
+            a.approvals_required = max(a.approvals_required,
+                                       _tiers.approvals_required(raised, self.policy.required_overrides))
         owners = sorted({str(o).strip() for o in (owners or []) if str(o).strip()})
         if require_owners and not owners and a.approvals_required > 0:
             audit.append("dev.propose.rejected", proposer, action=action, reason="no_owner_mapping")
@@ -138,8 +146,11 @@ class DevGate:
                "tier": a.tier, "category": a.category, "known": a.known,
                "approvals_required": a.approvals_required, "reasons": a.reasons, "approvals": [],
                "destructive": guard.destructive, "blast_radius": guard.blast or None,
+               "advisory": None,
                "status": "allowed" if a.approvals_required == 0 else "pending",
                "created_at": now, "expires_at": now + self.policy.ttl, "result": None}
+        if req["approvals_required"] > 0:
+            req["advisory"] = adv
         self.store.insert(req)
         audit.append("dev.proposed", proposer, request_id=rid, action=action, tier=a.tier,
                      known=a.known, payload_hash=req["payload_hash"], reasons=a.reasons, owners=owners)
@@ -283,4 +294,4 @@ class DevGate:
     def _public(req: dict) -> dict:
         return {k: req[k] for k in ("request_id", "action", "tier", "category", "known", "status",
                                     "approvals_required", "approvals", "payload_hash", "reasons", "expires_at")} | \
-            {k: req.get(k) for k in ("destructive", "blast_radius")}
+            {k: req.get(k) for k in ("destructive", "blast_radius", "advisory")}
