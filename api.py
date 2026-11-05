@@ -637,7 +637,10 @@ from dev_governance.store import default_store as _dev_store
 
 
 def dev_gate() -> _DevGate:
-    return _DevGate(store=_dev_store())
+    from dev_governance.breaker import default_breaker as _dev_breaker
+    from dev_governance.policy import load_policy as _load_dev_policy
+    pol = _load_dev_policy()
+    return _DevGate(policy=pol, store=_dev_store(), breaker=_dev_breaker(pol.data.get("breaker")))
 
 
 app.include_router(_make_dev_router(lambda: dev_gate(), require_caller, require_approver))

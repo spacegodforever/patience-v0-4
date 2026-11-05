@@ -70,4 +70,12 @@ def make_router(gate_factory: Callable[[], DevGate], caller_dep: Callable, appro
         code, out = _run(lambda: gate_factory().execute(rid, body.action, body.payload, caller["id"]))
         return JSONResponse(status_code=code, content=out)
 
+    @r.get("/breaker/{agent}")
+    def breaker_status(agent: str, caller: dict = Depends(caller_dep)):
+        return _run(lambda: gate_factory().breaker_status(agent))
+
+    @r.post("/breaker/{agent}/reset")
+    def breaker_reset(agent: str, body: DecideIn = DecideIn(), who: dict = Depends(approver_dep)):
+        return _run(lambda: gate_factory().reset_breaker(agent, who["user"], body.reason))
+
     return r

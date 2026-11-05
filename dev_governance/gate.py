@@ -16,6 +16,7 @@ from .policy import DevPolicy, load_policy
 from .adapters import Adapter, default_adapters
 from . import claims as _claims
 from . import destructive as _destructive
+from . import breaker as _breaker
 import tiers as _tiers
 from .store import MemoryStore, default_store
 
@@ -58,7 +59,7 @@ _MAX_CAS_RETRIES = 50
 
 class DevGate:
     def __init__(self, policy: Optional[DevPolicy] = None, adapters: Optional[list[Adapter]] = None,
-                 clock: Callable[[], float] = time.time, store=None):
+                 clock: Callable[[], float] = time.time, store=None, breaker=None):
         self.policy = policy or load_policy()
         self.adapters: dict[str, Adapter] = {}
         for a in (adapters if adapters is not None else default_adapters()):
@@ -66,6 +67,33 @@ class DevGate:
                 self.adapters[act] = a
         self.clock = clock
         self.store = store if store is not None else MemoryStore()
+        self.breaker = breaker if breaker is not None else _breaker.Breaker(None, self.policy.data.get("breaker"), clock)
+
+    def _halt_checks(self, agent: str, what: str) -> None:
+        if _breaker.kill_switch_on():
+            audit.append("dev.kill_switch.blocked", agent, what=what)
+            raise GateError(503, "PATIENCE_DEV_KILL is on: all dev actions are halted")
+        if agent and self.breaker.frozen(agent):
+            audit.append("dev.breaker.held", agent, what=what)
+            raise GateError(423, f"agent {agent!r} is frozen by the circuit breaker; a human approver must reset it")
+
+    def _trip_check(self, agent: str, kind: str) -> None:
+        reason = self.breaker.record(agent, kind)
+        if reason:
+            audit.append("dev.breaker.tripped", agent, reason=reason)
+
+    def reset_breaker(self, agent: str, approver: str, reason: str = "") -> dict:
+        if not approver:
+            raise GateError(403, "a human approver is required to reset the breaker")
+        prev = self.breaker.reset(agent, approver)
+        audit.append("dev.breaker.reset", approver, agent=agent, was_frozen=prev.get("frozen"),
+                     prior_reason=prev.get("reason"), reason=reason)
+        return {"agent": agent, "frozen": False, "was_frozen": bool(prev.get("frozen"))}
+
+    def breaker_status(self, agent: str) -> dict:
+        st = self.breaker.state(agent)
+        return {"agent": agent, "frozen": st["frozen"], "reason": st["reason"], "tripped_at": st["tripped_at"],
+                "kill_switch": _breaker.kill_switch_on()}
 
     # 1. propose + 2. policy
     def propose(self, action: str, payload: dict, proposer: str, floor: Optional[str] = None,
@@ -75,6 +103,7 @@ class DevGate:
         action = (action or "").strip().lower()
         if not proposer:
             raise GateError(400, "proposer is required")
+        self._halt_checks(proposer, "propose")
         stored = json.loads(canonical_json(payload or {}))  # 422 on non-JSON values (RT-06)
         ad = self.adapters.get(action)
         if ad is not None and hasattr(ad, "validate"):
@@ -98,6 +127,10 @@ class DevGate:
         if require_owners and not owners and a.approvals_required > 0:
             audit.append("dev.propose.rejected", proposer, action=action, reason="no_owner_mapping")
             raise GateError(403, "proposer has no owner mapping; non-low dev actions are refused (set owners)")
+        if a.tier in ("high", "critical"):
+            self._trip_check(proposer, "high")
+            if self.breaker.frozen(proposer):
+                raise GateError(423, f"agent {proposer!r} tripped the circuit breaker; a human approver must reset it")
         rid = "dev_" + secrets.token_hex(8)
         now = self.clock()
         req = {"request_id": rid, "action": action, "payload": stored,
@@ -113,7 +146,7 @@ class DevGate:
         return self._public(req)
 
     def _on_refused(self, proposer: str) -> None:
-        """Hook for the circuit breaker (refusals count as anomalies)."""
+        self._trip_check(proposer, "anomaly")  # refusals count as anomalies
 
     def _get(self, rid: str) -> dict:
         req = self.store.get(rid)
@@ -144,6 +177,7 @@ class DevGate:
 
     # 3. approval
     def approve(self, rid: str, approver: str, reason: str = "") -> dict:
+        self._halt_checks(self._get(rid)["proposer"], "approve")
         if self._expire_if_due(rid)["status"] == "expired":
             raise GateError(409, "approval window expired; submit a new proposal")
 
@@ -187,6 +221,7 @@ class DevGate:
         if h != req["payload_hash"]:
             audit.append("dev.payload_mismatch", caller, request_id=rid, expected=req["payload_hash"], got=h)
             raise GateError(409, "action/payload differ from the approved request; a new approval is required")
+        self._halt_checks(req["proposer"], "execute")
         allowed = {req["proposer"]}
         if self.policy.data.get("execute_by", "proposer_or_owner") == "proposer_or_owner":
             allowed |= set(req.get("owners") or [])

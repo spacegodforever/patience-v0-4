@@ -11,6 +11,9 @@ approvers_required: {low: 0, medium: 1, high: 1, critical: 2}
 # backup evidence and blast_radius; tier critical (2 approvers); over max -> 3 approvers; over
 # max x hard_factor -> refused.
 catastrophe: {max_rows: 10000, max_resources: 10, hard_factor: 10, min_rollback_chars: 20}
+# Circuit breaker (dev_governance/breaker.py): per-agent rolling window. Over the limit the agent is
+# frozen and its requests held until a human approver resets it. PATIENCE_DEV_KILL=1 halts everything.
+breaker: {window_seconds: 300, max_high_proposals: 5, max_anomalies: 3}
 actions:
   code.open_pr:        {tier: medium, category: code_change}
   code.merge_pr:       {tier: high,   category: code_change}

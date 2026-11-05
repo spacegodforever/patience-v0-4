@@ -235,3 +235,119 @@ def test_non_destructive_untouched():
 def test_classify_is_deterministic():
     p = {"cmd": "rm -rf /srv && DROP TABLE x"}
     assert destructive.classify("ci.run", p) == destructive.classify("ci.run", dict(p))
+
+
+# ---- 4. circuit breaker + kill switch -----------------------------------------------
+from dev_governance.breaker import Breaker
+
+MERGE = {**PR, "pr_number": 7}
+
+
+def _gate(clk=None, path=None, **cfg):
+    clk = clk or Clock()
+    c = {"window_seconds": 300, "max_high_proposals": 3, "max_anomalies": 2, **cfg}
+    return DevGate(clock=clk, breaker=Breaker(path, c, clk)), clk
+
+
+def test_breaker_trips_on_burst_of_high_proposals_and_holds_pending():
+    g, clk = _gate()
+    rids = [g.propose("code.merge_pr", MERGE, "bot")["request_id"] for _ in range(3)]
+    g.approve(rids[0], "matthew")
+    with pytest.raises(GateError) as e:
+        g.propose("code.merge_pr", MERGE, "bot")
+    assert e.value.status == 423
+    assert any("dev.breaker.tripped" in ev for ev in events())
+    with pytest.raises(GateError) as e:  # approved request is held
+        g.execute(rids[0], "code.merge_pr", MERGE, "bot")
+    assert e.value.status == 423
+    with pytest.raises(GateError) as e:  # pending request is held
+        g.approve(rids[1], "matthew")
+    assert e.value.status == 423
+    assert g.status(rids[0])["status"] == "approved"  # held, not consumed
+
+
+def test_breaker_window_rolls():
+    g, clk = _gate()
+    for _ in range(3):
+        g.propose("code.merge_pr", MERGE, "bot")
+    clk.t += 301
+    for _ in range(3):
+        g.propose("code.merge_pr", MERGE, "bot")
+
+
+def test_low_tier_does_not_count_and_other_agents_unaffected():
+    g, _ = _gate()
+    for _ in range(20):
+        g.propose("ci.run", {}, "bot")
+    for _ in range(3):
+        g.propose("code.merge_pr", MERGE, "bot")
+    with pytest.raises(GateError):
+        g.propose("code.merge_pr", MERGE, "bot")
+    assert g.propose("code.merge_pr", MERGE, "other-bot")["status"] == "pending"
+
+
+def test_breaker_trips_on_refused_destructive_anomalies():
+    g, _ = _gate()
+    for _ in range(2):
+        with pytest.raises(GateError) as e:
+            g.propose("db.drop", {"table": "x"}, "bot")
+        assert e.value.status == 422
+    with pytest.raises(GateError) as e:
+        g.propose("ci.run", {}, "bot")
+    assert e.value.status == 423
+
+
+def test_only_human_reset_unfreezes_and_is_audited():
+    g, _ = _gate()
+    for _ in range(4):
+        try:
+            g.propose("code.merge_pr", MERGE, "bot")
+        except GateError:
+            pass
+    with pytest.raises(GateError):
+        g.reset_breaker("bot", "")
+    assert g.breaker_status("bot")["frozen"]
+    assert g.reset_breaker("bot", "matthew")["was_frozen"]
+    assert any("dev.breaker.reset" in ev for ev in events())
+    assert g.propose("code.merge_pr", MERGE, "bot")["status"] == "pending"
+
+
+def test_breaker_state_survives_restart(tmp_path):
+    db = str(tmp_path / "b.db")
+    g, clk = _gate(path=db)
+    for _ in range(4):
+        try:
+            g.propose("code.merge_pr", MERGE, "bot")
+        except GateError:
+            pass
+    g2, _ = _gate(clk=clk, path=db)
+    assert g2.breaker_status("bot")["frozen"]
+
+
+def test_global_kill_switch(monkeypatch):
+    g, _ = _gate()
+    rid = g.propose("code.open_pr", PR, "bot")["request_id"]
+    g.approve(rid, "matthew")
+    monkeypatch.setenv("PATIENCE_DEV_KILL", "1")
+    for fn in (lambda: g.propose("ci.run", {}, "bot"), lambda: g.approve(rid, "alice"),
+               lambda: g.execute(rid, "code.open_pr", PR, "bot")):
+        with pytest.raises(GateError) as e:
+            fn()
+        assert e.value.status == 503
+    monkeypatch.delenv("PATIENCE_DEV_KILL")
+    assert g.execute(rid, "code.open_pr", PR, "bot")[0] == 200
+
+
+def test_breaker_reset_via_api_requires_approver(monkeypatch):
+    import base64, approvers, api
+    from fastapi.testclient import TestClient
+    monkeypatch.delenv("PATIENCE_DEV_OPEN", raising=False)
+    monkeypatch.delenv("PATIENCE_LEGACY_APPROVER_TOKEN", raising=False)
+    monkeypatch.setenv("PATIENCE_API_TOKEN", "agent-token-0123456789")
+    approvers.add("matthew", "matthew-password-1", "approver")
+    c = TestClient(api.app)
+    B = {"Authorization": "Bearer agent-token-0123456789"}
+    assert c.post("/v1/dev/breaker/bot/reset", headers=B).status_code in (401, 403)
+    basic = {"Authorization": "Basic " + base64.b64encode(b"matthew:matthew-password-1").decode()}
+    assert c.post("/v1/dev/breaker/bot/reset", headers=basic).status_code == 200
+    assert c.get("/v1/dev/breaker/bot", headers=B).json()["frozen"] is False
