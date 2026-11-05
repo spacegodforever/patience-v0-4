@@ -5,13 +5,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi.testclient import TestClient
 import risk_policy
 
-APPR = {"X-Approver-Token": "appr"}
+APPR = {"X-Approver-Token": "appr-legacy-test-token-0123456789abcdef"}
 
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("PATIENCE_STATE_PATH", str(tmp_path / "state.json"))
-    monkeypatch.setenv("PATIENCE_APPROVER_TOKEN", "appr")
+    monkeypatch.setenv("PATIENCE_APPROVER_TOKEN", "appr-legacy-test-token-0123456789abcdef")
     monkeypatch.setenv("PATIENCE_AGENTS", str(tmp_path / "agents.yaml"))
     monkeypatch.setenv("PATIENCE_EXECUTOR_MOCK", "1")
     for v in ("PATIENCE_API_TOKEN", "PATIENCE_LLM_API_KEY", "PATIENCE_EXECUTE_LIVE", "PATIENCE_SMTP_HOST",

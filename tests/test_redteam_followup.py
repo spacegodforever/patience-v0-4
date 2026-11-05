@@ -151,3 +151,29 @@ def test_rt11_benign_low_stays_low(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     r = c.post("/v1/dev/check", json={"action": "ci.run", "payload": {}, "text": "run the tests"})
     assert r.json()["tier"] == "low" and r.json()["status"] == "allowed"
+
+
+# ---- RT-13: legacy shared approver token restricted -----------------------------------
+LEGACY = "legacy-shared-approver-token-0123456789"
+
+
+def test_rt13_legacy_token_off_by_default_and_short_tokens_refused(monkeypatch):
+    import api
+    monkeypatch.delenv("PATIENCE_LEGACY_APPROVER_TOKEN", raising=False)
+    monkeypatch.setenv("PATIENCE_APPROVER_TOKEN", LEGACY)
+    assert not api.legacy_token_enabled()
+    monkeypatch.setenv("PATIENCE_LEGACY_APPROVER_TOKEN", "1")
+    assert api.legacy_token_enabled()
+    monkeypatch.setenv("PATIENCE_APPROVER_TOKEN", "short")
+    assert not api.legacy_token_enabled()
+
+
+def test_rt13_legacy_token_never_approves_dev_requests(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setenv("PATIENCE_LEGACY_APPROVER_TOKEN", "1")
+    monkeypatch.setenv("PATIENCE_APPROVER_TOKEN", LEGACY)
+    rid = c.post("/v1/dev/check", json={"action": "code.open_pr", "payload": PR}).json()["request_id"]
+    h = {"X-Approver-Token": LEGACY}
+    assert c.post(f"/v1/dev/requests/{rid}/approve", headers=h).status_code == 403
+    assert c.post("/v1/dev/breaker/bot/reset", headers=h).status_code == 403
+    assert "auth.legacy_token_refused" in events()

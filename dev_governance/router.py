@@ -47,6 +47,17 @@ def owners_of(caller: dict) -> list:
 
 def make_router(gate_factory: Callable[[], DevGate], caller_dep: Callable, approver_dep: Callable) -> APIRouter:
     r = APIRouter(prefix="/v1/dev")
+    base_approver = approver_dep
+
+    def approver_dep(who: dict = Depends(base_approver)) -> dict:  # noqa: F811
+        """RT-13: the deprecated shared legacy token is never accepted on dev-governance routes
+        (approve/deny/breaker reset); a named per-user approver account is required."""
+        if who.get("legacy"):
+            import audit
+            audit.append("auth.legacy_token_refused", who.get("user"), channel="api", scope="dev")
+            raise HTTPException(403, "The legacy shared approver token is not accepted for dev actions; "
+                                     "use a named approvers.yaml account.")
+        return who
 
     @r.post("/check")
     def check(body: ProposeIn, caller: dict = Depends(caller_dep)):

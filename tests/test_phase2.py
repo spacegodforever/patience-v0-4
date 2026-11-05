@@ -9,7 +9,7 @@ import risk_policy
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("PATIENCE_STATE_PATH", str(tmp_path / "state.json"))
-    monkeypatch.setenv("PATIENCE_APPROVER_TOKEN", "appr")
+    monkeypatch.setenv("PATIENCE_APPROVER_TOKEN", "appr-legacy-test-token-0123456789abcdef")
     monkeypatch.delenv("PATIENCE_API_TOKEN", raising=False)
     monkeypatch.delenv("PATIENCE_LLM_API_KEY", raising=False)
     monkeypatch.setenv("PATIENCE_AGENTS", str(tmp_path / "no_agents.yaml"))  # dev mode by default
@@ -109,7 +109,7 @@ def test_window_expiry(client, keys, monkeypatch):
 def test_approved_calls_count_against_budget(client, keys):
     r = chk(client, keys["bot-A"], tool="refund", args={"amount": 1900})
     assert r["decision"] == "needs_approval"
-    assert client.post(f"/v1/requests/{r['request_id']}/approve", headers={"X-Approver-Token": "appr"}).status_code == 200
+    assert client.post(f"/v1/requests/{r['request_id']}/approve", headers={"X-Approver-Token": "appr-legacy-test-token-0123456789abcdef"}).status_code == 200
     r = chk(client, keys["bot-A"], tool="refund", args={"amount": 150})
     assert r["decision"] == "needs_approval" and "budget_exceeded" in r["flags"]
 

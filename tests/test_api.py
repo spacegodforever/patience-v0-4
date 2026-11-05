@@ -37,17 +37,17 @@ def test_check_demos(client, text, expected, tmp_path):
         assert r["approval_key"] in s.blocked_actions and r["approval_key"] not in s.authorized_actions
 
 def test_approve_flow(client, monkeypatch):
-    monkeypatch.setenv("PATIENCE_APPROVER_TOKEN", "boss")
+    monkeypatch.setenv("PATIENCE_APPROVER_TOKEN", "boss-legacy-test-token-0123456789abcdef")
     r = client.post("/v1/check", json={"action": DEMOS[3][0]}).json()
     other = client.post("/v1/check", json={"action": DEMOS[4][0]}).json()
     rid = r["request_id"]
     assert client.post(f"/v1/requests/{rid}/approve").status_code == 403
     assert client.post(f"/v1/requests/{rid}/approve", headers={"X-Approver-Token": "nope"}).status_code == 403
-    ok = client.post(f"/v1/requests/{rid}/approve", headers={"X-Approver-Token": "boss"})
+    ok = client.post(f"/v1/requests/{rid}/approve", headers={"X-Approver-Token": "boss-legacy-test-token-0123456789abcdef"})
     assert ok.status_code == 200 and ok.json()["status"] == "approved"
     assert client.get(f"/v1/requests/{rid}").json()["status"] == "approved"
     assert client.get(f"/v1/requests/{other['request_id']}").json()["status"] == "pending"  # per-request
-    d = client.post(f"/v1/requests/{other['request_id']}/deny", headers={"X-Approver-Token": "boss"})
+    d = client.post(f"/v1/requests/{other['request_id']}/deny", headers={"X-Approver-Token": "boss-legacy-test-token-0123456789abcdef"})
     assert d.json()["status"] == "denied"
 
 def test_approvals_disabled_without_token(client):
