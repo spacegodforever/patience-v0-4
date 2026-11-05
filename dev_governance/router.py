@@ -50,7 +50,10 @@ def make_router(gate_factory: Callable[[], DevGate], caller_dep: Callable, appro
 
     @r.post("/check")
     def check(body: ProposeIn, caller: dict = Depends(caller_dep)):
+        from .threat import assess as _threat  # RT-11: server-side floor; never client-supplied
+        t = _threat(body.action, body.text, body.payload)
         return _run(lambda: gate_factory().propose(body.action, body.payload, caller["id"],
+                                                   floor=t["floor"],
                                                    owners=owners_of(caller),
                                                    require_owners=caller.get("mode") != "dev",
                                                    text=body.text))
