@@ -6,6 +6,7 @@ import audit
 from dev_governance import DevGate, GateError
 from dev_governance.adapters import SimulatedDeployAdapter
 from dev_governance.gate import payload_hash
+from dev_governance import claims
 from dev_governance.github_adapter import GitHubAdapter, GitHubAdapterError
 from dev_governance.store import SqliteStore
 
@@ -216,7 +217,9 @@ def test_adapter_rechecks_approval_and_hash_directly(monkeypatch):
     live_env(monkeypatch)
     t = Mock(status=201, body={})
     a = GitHubAdapter(transport=t)
-    good = {"approved": True, "tier": "medium", "payload_hash": payload_hash("code.open_pr", PR)}
+    h = payload_hash("code.open_pr", PR)
+    good = {"approved": True, "tier": "medium", "payload_hash": h, "request_id": "dev_x",
+            "claim_token": claims.mint("dev_x", h)}
     assert a.execute("code.open_pr", PR, {**good, "approved": False})["dry_run"] is True
     assert a.execute("code.open_pr", PR, {**good, "payload_hash": "x"})["dry_run"] is True
     assert a.execute("code.open_pr", {**PR, "base": "main"}, good)["dry_run"] is True
@@ -267,7 +270,9 @@ def test_token_read_at_execution_time(monkeypatch):
     t = Mock(status=201, body={})
     a = GitHubAdapter(transport=t)  # constructed with no token in env
     monkeypatch.setenv("PATIENCE_GITHUB_TOKEN", FAKE)
-    a.execute("code.open_pr", PR, {"approved": True, "tier": "medium", "payload_hash": payload_hash("code.open_pr", PR)})
+    h = payload_hash("code.open_pr", PR)
+    a.execute("code.open_pr", PR, {"approved": True, "tier": "medium", "payload_hash": h,
+                                   "request_id": "dev_t", "claim_token": claims.mint("dev_t", h)})
     assert t.calls[0]["headers"]["Authorization"] == f"Bearer {FAKE}"
     assert FAKE not in json.dumps(vars(a), default=str)
 
@@ -317,3 +322,58 @@ def test_kill_switch_checked_at_send_time(monkeypatch):
     with pytest.raises(GitHubAdapterError):
         a.execute("code.open_pr", PR, {"approved": True, "tier": "medium", "payload_hash": payload_hash("code.open_pr", PR)})
     assert sent == []
+
+
+# ---- RT-10: live path requires a single-use, request-bound claim token ---------------
+def _ctx(rid="dev_c", payload=PR, token=True):
+    h = payload_hash("code.open_pr", payload)
+    c = {"approved": True, "tier": "medium", "payload_hash": h, "request_id": rid}
+    if token:
+        c["claim_token"] = claims.mint(rid, h)
+    return c
+
+
+def test_live_send_refused_without_claim_token(monkeypatch):
+    live_env(monkeypatch)
+    t = Mock(status=201, body={})
+    with pytest.raises(GitHubAdapterError, match="claim token"):
+        GitHubAdapter(transport=t).execute("code.open_pr", PR, _ctx(token=False))
+    assert t.calls == []
+
+
+def test_live_send_refuses_reused_claim_token(monkeypatch):
+    live_env(monkeypatch)
+    t = Mock(status=201, body={})
+    a, c = GitHubAdapter(transport=t), _ctx()
+    a.execute("code.open_pr", PR, c)
+    with pytest.raises(GitHubAdapterError, match="claim token"):
+        a.execute("code.open_pr", PR, c)
+    assert len(t.calls) == 1
+
+
+def test_live_send_refuses_token_for_other_request(monkeypatch):
+    live_env(monkeypatch)
+    t = Mock(status=201, body={})
+    c = _ctx()
+    c["claim_token"] = claims.mint("dev_other", c["payload_hash"])
+    with pytest.raises(GitHubAdapterError, match="claim token"):
+        GitHubAdapter(transport=t).execute("code.open_pr", PR, c)
+    assert t.calls == []
+
+
+def test_read_path_also_requires_claim_token(monkeypatch):
+    live_env(monkeypatch)
+    t = Mock(status=200, body={})
+    p = {"repo": PR["repo"]}
+    h = payload_hash("code.get_repo", p)
+    with pytest.raises(GitHubAdapterError, match="claim token"):
+        GitHubAdapter(transport=t).execute("code.get_repo", p, {"payload_hash": h, "request_id": "r"})
+    assert t.calls == []
+
+
+def test_gate_mints_token_for_github_adapter(monkeypatch):
+    live_env(monkeypatch)
+    t = Mock(status=201, body={"number": 1})
+    g = gate_with(t)
+    _, out = g.execute(approved(g), "code.open_pr", PR, "agent-1")
+    assert out["result"]["dry_run"] is False and len(t.calls) == 1

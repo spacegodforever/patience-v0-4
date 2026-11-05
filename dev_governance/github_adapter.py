@@ -43,6 +43,7 @@ def _csv(name: str) -> set:
 class GitHubAdapter(Adapter):
     actions = READ_ACTIONS + WRITE_ACTIONS
     simulated = False
+    live = True  # gate mints a single-use claim token (RT-10); verified before any send
 
     def __init__(self, transport: Optional[Transport] = None, token_env: str = "PATIENCE_GITHUB_TOKEN"):
         self.transport = transport
@@ -124,6 +125,12 @@ class GitHubAdapter(Adapter):
                         else ["no transport configured"]}
         if _flag("PATIENCE_DEV_KILL"):  # re-check immediately before sending
             raise GitHubAdapterError("kill switch on")
+        from . import claims as _claims
+        from .gate import payload_hash as _ph
+        try:  # RT-10: single-use, request-bound claim token, recomputed from what we will send
+            _claims.verify_claim(ctx, _ph(action, payload))
+        except _claims.ClaimError as e:
+            raise GitHubAdapterError(f"claim token refused: {e}") from None
         token = os.environ.get(self.token_env, "")
         if not token:
             raise GitHubAdapterError(f"{self.token_env} is not set")
