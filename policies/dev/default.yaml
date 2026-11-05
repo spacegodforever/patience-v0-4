@@ -4,6 +4,8 @@
 version: 1
 approval_ttl_seconds: 3600
 unknown_action_tier: high
+# Who may execute an approved request: proposer | proposer_or_owner (RT-07)
+execute_by: proposer_or_owner
 approvers_required: {low: 0, medium: 1, high: 1, critical: 2}
 actions:
   code.open_pr:        {tier: medium, category: code_change}

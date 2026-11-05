@@ -169,6 +169,12 @@ class DevGate:
         if h != req["payload_hash"]:
             audit.append("dev.payload_mismatch", caller, request_id=rid, expected=req["payload_hash"], got=h)
             raise GateError(409, "action/payload differ from the approved request; a new approval is required")
+        allowed = {req["proposer"]}
+        if self.policy.data.get("execute_by", "proposer_or_owner") == "proposer_or_owner":
+            allowed |= set(req.get("owners") or [])
+        if caller not in allowed:  # RT-07: an approval is bound to whoever proposed it
+            audit.append("dev.execute.forbidden", caller, request_id=rid, proposer=req["proposer"])
+            raise GateError(403, "only the proposer (or its owner) may execute this request")
         if self._expire_if_due(rid)["status"] == "expired":
             raise GateError(409, "approval window expired; submit a new proposal")
 
