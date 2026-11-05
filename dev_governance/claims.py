@@ -19,7 +19,36 @@ import time
 from typing import Callable
 
 CLAIM_TTL_SECONDS = 60
+MAX_SKEW_SECONDS = 30
 _PROCESS_SECRET = secrets.token_bytes(32)
+_FILE_SECRET: bytes | None = None
+
+
+def skew_seconds() -> int:
+    """RT-08: tolerated clock skew between workers (PATIENCE_CLAIM_SKEW, default 5, clamped 0..30)."""
+    try:
+        v = int(os.environ.get("PATIENCE_CLAIM_SKEW", "5"))
+    except ValueError:
+        v = 5
+    return max(0, min(MAX_SKEW_SECONDS, v))
+
+
+def use_secret_file(path: str) -> None:
+    """Shared-secret fallback for multi-worker deployments without PATIENCE_CLAIM_SECRET:
+    a 0600 key file next to the shared DB (created once, atomically)."""
+    global _FILE_SECRET
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(secrets.token_hex(32))
+    except FileExistsError:
+        pass
+    from .fsperm import secure_file
+    secure_file(path)
+    with open(path) as f:
+        key = f.read().strip()
+    if len(key) >= 32:
+        _FILE_SECRET = key.encode()
 _used: dict[str, float] = {}
 _lock = threading.Lock()
 
@@ -30,7 +59,19 @@ class ClaimError(Exception):
 
 def _secret() -> bytes:
     s = os.environ.get("PATIENCE_CLAIM_SECRET", "")
-    return s.encode() if len(s) >= 32 else _PROCESS_SECRET
+    if len(s) >= 32:
+        return s.encode()
+    return _FILE_SECRET or _PROCESS_SECRET
+
+
+def sign_fields(kind: str, *fields) -> str:
+    """HMAC over arbitrary fields, e.g. a request's expiry (RT-08)."""
+    msg = "|".join([kind] + [repr(f) for f in fields]).encode()
+    return hmac.new(_secret(), msg, hashlib.sha256).hexdigest()
+
+
+def check_fields(sig: str, kind: str, *fields) -> bool:
+    return isinstance(sig, str) and hmac.compare_digest(sig, sign_fields(kind, *fields))
 
 
 def _sig(rid: str, h: str, exp: int, nonce: str) -> str:
@@ -59,9 +100,11 @@ def verify(token: str, rid: str, payload_hash: str, clock: Callable[[], float] =
         raise ClaimError("execution claim token signature invalid")
     if not (hmac.compare_digest(t_rid, rid) and hmac.compare_digest(t_h, payload_hash)):
         raise ClaimError("execution claim token is for a different request or payload")
-    now = clock()
-    if now > exp:
+    now, skew = clock(), skew_seconds()
+    if now > exp + skew:  # RT-08: tolerate small clock skew between workers
         raise ClaimError("execution claim token expired")
+    if exp > now + CLAIM_TTL_SECONDS + skew:
+        raise ClaimError("execution claim token expiry is too far in the future")
     with _lock:
         for n, e in list(_used.items()):
             if e < now - 3600:

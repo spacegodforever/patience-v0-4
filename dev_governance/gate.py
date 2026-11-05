@@ -69,6 +69,9 @@ class DevGate:
                 self.adapters[act] = a
         self.clock = clock
         self.store = store if store is not None else MemoryStore()
+        spath = getattr(self.store, "path", None)
+        if spath and spath != ":memory:":
+            _claims.use_secret_file(spath + ".key")
         self.breaker = breaker if breaker is not None else _breaker.Breaker(None, self.policy.data.get("breaker"), clock)
 
     def _halt_checks(self, agent: str, what: str) -> None:
@@ -152,6 +155,7 @@ class DevGate:
                "advisory": None,
                "status": "allowed" if a.approvals_required == 0 else "pending",
                "created_at": now, "expires_at": now + self.policy.ttl, "result": None}
+        req["expiry_sig"] = self._expiry_sig(req)  # RT-08: expiry is bound to the request
         if req["approvals_required"] > 0 or (amb and amb["warnings"]):
             req["advisory"] = adv
         self.store.insert(req)
@@ -178,14 +182,32 @@ class DevGate:
                 return req, changed, value
         raise GateError(409, "request is under heavy contention; retry")
 
+    @staticmethod
+    def _expiry_sig(req: dict) -> str:
+        return _claims.sign_fields("expiry-v1", req["request_id"], req["payload_hash"],
+                                   float(req["created_at"]), float(req["expires_at"]))
+
     def _expire_if_due(self, rid: str) -> dict:
+        """RT-08: an expiry that does not match its signature (e.g. edited in the DB to extend the
+        window) fails closed: the request is expired. The window may also never exceed policy TTL."""
+        why = {}
+
         def m(req):
-            if req["status"] in ("pending", "approved") and self.clock() > req["expires_at"]:
+            if req["status"] not in ("pending", "approved"):
+                return False, None
+            tampered = not _claims.check_fields(req.get("expiry_sig"), "expiry-v1", req["request_id"],
+                                                req["payload_hash"], float(req["created_at"]),
+                                                float(req["expires_at"])) \
+                or float(req["expires_at"]) - float(req["created_at"]) > self.policy.ttl
+            if tampered or self.clock() > req["expires_at"]:
                 req["status"] = "expired"
+                why["tampered"] = tampered
                 return True, None
             return False, None
         req, changed, _ = self._update(rid, m)
         if changed:
+            if why.get("tampered"):
+                audit.append("dev.expiry.tampered", None, request_id=rid)
             audit.append("dev.expired", None, request_id=rid)
         return req
 

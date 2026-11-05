@@ -16,6 +16,8 @@ import sqlite3
 import threading
 from typing import Optional
 
+from . import fsperm as _fsperm
+
 SCHEMA_VERSION = 2
 TERMINAL = ("executed", "denied", "expired")
 MIGRATIONS = [
@@ -91,11 +93,8 @@ class SqliteStore:
                 c.execute(MIGRATIONS[i])
             c.execute("INSERT OR REPLACE INTO meta (k, v) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
             c.execute("COMMIT")
-        if new:
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
+        # RT-09: tighten new AND pre-existing DB files (and WAL/SHM sidecars) to 0600
+        self.permissions_fixed = _fsperm.secure_file(path)
 
     def _conn(self):
         c = sqlite3.connect(self.path, timeout=30, isolation_level=None)

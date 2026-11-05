@@ -33,6 +33,8 @@ class Breaker:
         if path:
             with self._conn() as c:
                 c.execute("CREATE TABLE IF NOT EXISTS dev_breaker (agent TEXT PRIMARY KEY, body TEXT NOT NULL)")
+            from .fsperm import secure_file
+            secure_file(path)  # RT-09
 
     def _conn(self):
         c = sqlite3.connect(self.path, timeout=30, isolation_level=None)

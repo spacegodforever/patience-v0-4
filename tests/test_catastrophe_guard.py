@@ -125,7 +125,7 @@ def test_rt10_forged_and_expired_refused():
         claims.verify(forged, "dev_a", h)
     clk = Clock()
     tok = claims.mint("dev_a", h, clk, ttl=5)
-    clk.t += 6
+    clk.t += 6 + claims.skew_seconds()  # past TTL plus tolerated skew (RT-08)
     with pytest.raises(claims.ClaimError, match="expired"):
         claims.verify(tok, "dev_a", h, clk)
 
