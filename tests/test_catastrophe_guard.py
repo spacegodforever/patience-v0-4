@@ -418,7 +418,9 @@ def test_ambiguous_verb_ranks_interpretations_and_marks_payload():
     assert v["verb"] == "clean up" and v["payload_rank"] == 1
     assert [i["rank"] for i in v["interpretations"]] == [0, 1, 2]
     assert [i["matches_payload"] for i in v["interpretations"]] == [False, True, False]
-    assert r["tier_floor"] == "medium"
+    # v2: an ambiguous verb is not an acknowledgement of a destructive payload -> mismatch -> critical
+    assert r["tier_floor"] == "critical"
+    assert ambiguity.analyze("clean up the readme", "code.open_pr", PR)["tier_floor"] == "medium"
 
 
 def test_most_destructive_reading_is_flagged_mismatch():
