@@ -25,7 +25,10 @@ class Clock:
 
 PR = {"repo": "spacegodforever/patience-v0-4", "head": "feat/x", "base": "v0.6-security-fixes"}
 MERGE = {**PR, "pr_number": 7}
-PROD = {"service": "api", "environment": "prod", "version": "1.2.3"}
+PROD = {"service": "api", "environment": "prod", "version": "1.2.3",
+    # destructive-action guard (feat/catastrophe-guard) requires these for prod changes
+    "rollback_plan": "redeploy previous version 1.2.2 via deploy.rollback", "backup": {"snapshot_id": "snap-1"},
+    "blast_radius": {"rows": 0, "resources": 1}}
 
 
 class SlowAdapter:

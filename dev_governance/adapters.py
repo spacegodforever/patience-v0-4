@@ -50,5 +50,17 @@ class SimulatedDeployAdapter(Adapter):
                 "deployment_id": _fake_id(payload["service"], payload["version"], ctx["request_id"])}
 
 
+class SimulatedDestructiveAdapter(Adapter):
+    """Simulates irreversible operations. Never touches anything; reports what it would do."""
+    actions = ("db.drop", "db.truncate", "db.delete_rows", "db.migrate", "repo.delete", "data.wipe",
+               "infra.destroy", "infra.apply", "secrets.rotate")
+
+    def execute(self, action, payload, ctx):
+        return {"simulated": True, "adapter": "destructive_sim", "action": action,
+                "would_do": f"{action} (blast radius {payload.get('blast_radius')})",
+                "rollback_plan_recorded": bool(payload.get("rollback_plan")),
+                "fake_ref": _fake_id(action, ctx["request_id"])}
+
+
 def default_adapters() -> list[Adapter]:
-    return [SimulatedGitHubPRAdapter(), SimulatedDeployAdapter()]
+    return [SimulatedGitHubPRAdapter(), SimulatedDeployAdapter(), SimulatedDestructiveAdapter()]

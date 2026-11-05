@@ -150,3 +150,88 @@ def test_rt10_simulated_adapter_gets_no_token():
     g = DevGate(clock=Clock(), adapters=[Sim()])
     g.execute(_approved(g), "code.open_pr", PR, "agent-1")
     assert "claim_token" not in seen
+
+
+# ---- 3. destructive-action guard ---------------------------------------------------
+from dev_governance import destructive
+
+SAFE = {"rollback_plan": "restore snapshot snap-42 with pg_restore, then replay WAL",
+        "backup": {"snapshot_id": "snap-42"}, "blast_radius": {"rows": 500, "resources": 1}}
+DROP = {"database": "members", "table": "payments", **SAFE}
+
+
+@pytest.mark.parametrize("action,payload", [
+    ("db.drop", {"table": "x"}), ("db.truncate", {}), ("db.delete_rows", {}), ("repo.delete", {"repo": "a/b"}),
+    ("code.force_push", {"repo": "a/b"}), ("data.wipe", {}), ("infra.destroy", {}), ("secrets.rotate", {}),
+    ("deploy.release", {"service": "api", "environment": "prd", "version": "1"}),
+    ("db.migrate", {"environment": "production"}), ("infra.apply", {"environment": "live"}),
+    ("ci.run", {"script": "psql -c 'DROP TABLE members'"}), ("ci.run", {"cmd": "rm -rf /data"}),
+    ("ci.run", {"sql": "DELETE FROM payments;"}), ("ci.run", {"cmd": "terraform destroy -auto-approve"}),
+])
+def test_destructive_without_plan_refused(action, payload):
+    g = DevGate(clock=Clock())
+    with pytest.raises(GateError) as e:
+        g.propose(action, payload, "agent-1")
+    assert e.value.status == 422 and "fail closed" in e.value.message
+    assert any("dev.destructive.refused" in ev for ev in events())
+
+
+@pytest.mark.parametrize("missing", ["rollback_plan", "backup", "blast_radius"])
+def test_each_requirement_is_mandatory(missing):
+    p = {k: v for k, v in DROP.items() if k != missing}
+    with pytest.raises(GateError) as e:
+        DevGate(clock=Clock()).propose("db.drop", p, "agent-1")
+    assert e.value.status == 422
+
+
+@pytest.mark.parametrize("bad", [{"rollback_plan": "undo"}, {"backup": {"snapshot_id": ""}},
+                                 {"backup": "yes"}, {"blast_radius": {"rows": -1, "resources": 1}},
+                                 {"blast_radius": {"rows": "many", "resources": 1}},
+                                 {"blast_radius": {"rows": True, "resources": 1}}])
+def test_weak_evidence_refused(bad):
+    with pytest.raises(GateError):
+        DevGate(clock=Clock()).propose("db.drop", {**DROP, **bad}, "agent-1")
+
+
+def test_destructive_forced_critical_two_approvers():
+    g = DevGate(clock=Clock())
+    r = g.propose("ci.run", {"cmd": "psql -c 'TRUNCATE members'", **SAFE}, "agent-1")
+    assert r["tier"] == "critical" and r["approvals_required"] == 2 and r["destructive"]  # was low
+    p = {"table": "members", **SAFE}
+    rid = g.propose("db.truncate", p, "agent-1")["request_id"]
+    g.approve(rid, "alice")
+    assert g.execute(rid, "db.truncate", p, "agent-1")[0] == 202
+    g.approve(rid, "bob")
+    code, out = g.execute(rid, "db.truncate", p, "agent-1")
+    assert code == 200 and out["result"]["simulated"]
+
+
+def test_blast_radius_over_limit_needs_split_approval():
+    p = {**DROP, "blast_radius": {"rows": 50_000, "resources": 1}}
+    g = DevGate(clock=Clock())
+    r = g.propose("db.drop", p, "agent-1")
+    assert r["approvals_required"] == 3
+    for who in ("alice", "bob"):
+        g.approve(r["request_id"], who)
+    assert g.execute(r["request_id"], "db.drop", p, "agent-1")[0] == 202
+    g.approve(r["request_id"], "carol")
+    assert g.execute(r["request_id"], "db.drop", p, "agent-1")[0] == 200
+
+
+@pytest.mark.parametrize("br", [{"rows": 100_001, "resources": 0}, {"rows": 0, "resources": 101}])
+def test_blast_radius_over_hard_limit_refused(br):
+    with pytest.raises(GateError) as e:
+        DevGate(clock=Clock()).propose("db.drop", {**DROP, "blast_radius": br}, "agent-1")
+    assert e.value.status == 422 and "split" in e.value.message
+
+
+def test_non_destructive_untouched():
+    g = DevGate(clock=Clock())
+    assert g.propose("ci.run", {"cmd": "pytest -q"}, "agent-1")["status"] == "allowed"
+    r = g.propose("deploy.release", {"service": "api", "environment": "staging", "version": "1"}, "agent-1")
+    assert r["tier"] == "medium" and not r["destructive"]
+
+
+def test_classify_is_deterministic():
+    p = {"cmd": "rm -rf /srv && DROP TABLE x"}
+    assert destructive.classify("ci.run", p) == destructive.classify("ci.run", dict(p))

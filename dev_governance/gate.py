@@ -15,6 +15,8 @@ import audit
 from .policy import DevPolicy, load_policy
 from .adapters import Adapter, default_adapters
 from . import claims as _claims
+from . import destructive as _destructive
+import tiers as _tiers
 from .store import MemoryStore, default_store
 
 
@@ -81,6 +83,17 @@ class DevGate:
             except ValueError as e:
                 raise GateError(422, str(e))
         a = self.policy.assess(action, stored, floor)
+        guard = _destructive.check(action, stored, self.policy.data.get("catastrophe"))
+        if guard.destructive:
+            if guard.refuse:
+                audit.append("dev.destructive.refused", proposer, action=action, reason=guard.refuse,
+                             why=guard.why)
+                self._on_refused(proposer)
+                raise GateError(422, f"refused (fail closed): {guard.refuse}")
+            a.tier = "critical"
+            a.approvals_required = max(a.approvals_required, guard.min_approvals,
+                                       _tiers.approvals_required("critical", self.policy.required_overrides))
+            a.reasons = a.reasons + [f"destructive: {w}" for w in guard.why]
         owners = sorted({str(o).strip() for o in (owners or []) if str(o).strip()})
         if require_owners and not owners and a.approvals_required > 0:
             audit.append("dev.propose.rejected", proposer, action=action, reason="no_owner_mapping")
@@ -91,12 +104,16 @@ class DevGate:
                "payload_hash": payload_hash(action, stored), "proposer": proposer, "owners": owners,
                "tier": a.tier, "category": a.category, "known": a.known,
                "approvals_required": a.approvals_required, "reasons": a.reasons, "approvals": [],
+               "destructive": guard.destructive, "blast_radius": guard.blast or None,
                "status": "allowed" if a.approvals_required == 0 else "pending",
                "created_at": now, "expires_at": now + self.policy.ttl, "result": None}
         self.store.insert(req)
         audit.append("dev.proposed", proposer, request_id=rid, action=action, tier=a.tier,
                      known=a.known, payload_hash=req["payload_hash"], reasons=a.reasons, owners=owners)
         return self._public(req)
+
+    def _on_refused(self, proposer: str) -> None:
+        """Hook for the circuit breaker (refusals count as anomalies)."""
 
     def _get(self, rid: str) -> dict:
         req = self.store.get(rid)
@@ -230,4 +247,5 @@ class DevGate:
     @staticmethod
     def _public(req: dict) -> dict:
         return {k: req[k] for k in ("request_id", "action", "tier", "category", "known", "status",
-                                    "approvals_required", "approvals", "payload_hash", "reasons", "expires_at")}
+                                    "approvals_required", "approvals", "payload_hash", "reasons", "expires_at")} | \
+            {k: req.get(k) for k in ("destructive", "blast_radius")}
