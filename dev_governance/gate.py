@@ -2,7 +2,7 @@
 
 Status codes mirror the main API: 202 = still needs approval, 409 = payload changed / reused /
 expired, 403 = forbidden approver or denied, 501 = no adapter. State is in memory (per gate
-instance); persistence is left for integration with engine state.
+instance store); the default store is SQLite (see store.py), so requests survive restarts.
 """
 from __future__ import annotations
 import hashlib
@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional
 import audit
 from .policy import DevPolicy, load_policy
 from .adapters import Adapter, default_adapters
+from .store import MemoryStore, default_store
 
 
 class GateError(Exception):
@@ -30,14 +31,14 @@ def payload_hash(action: str, payload: dict) -> str:
 
 class DevGate:
     def __init__(self, policy: Optional[DevPolicy] = None, adapters: Optional[list[Adapter]] = None,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, store=None):
         self.policy = policy or load_policy()
         self.adapters: dict[str, Adapter] = {}
         for a in (adapters if adapters is not None else default_adapters()):
             for act in a.actions:
                 self.adapters[act] = a
         self.clock = clock
-        self.requests: dict[str, dict] = {}
+        self.store = store if store is not None else MemoryStore()
 
     # 1. propose + 2. policy
     def propose(self, action: str, payload: dict, proposer: str, floor: Optional[str] = None) -> dict:
@@ -58,13 +59,13 @@ class DevGate:
                "category": a.category, "known": a.known, "approvals_required": a.approvals_required,
                "reasons": a.reasons, "approvals": [], "status": "allowed" if a.approvals_required == 0 else "pending",
                "created_at": now, "expires_at": now + self.policy.ttl, "result": None}
-        self.requests[rid] = req
+        self.store.put(req)
         audit.append("dev.proposed", proposer, request_id=rid, action=action, tier=a.tier,
                      known=a.known, payload_hash=req["payload_hash"], reasons=a.reasons)
         return self._public(req)
 
     def _get(self, rid: str) -> dict:
-        req = self.requests.get(rid)
+        req = self.store.get(rid)
         if req is None:
             raise GateError(404, "unknown request")
         return req
@@ -72,6 +73,7 @@ class DevGate:
     def _expired(self, req: dict) -> bool:
         if req["status"] in ("pending", "approved") and self.clock() > req["expires_at"]:
             req["status"] = "expired"
+            self.store.put(req)
             audit.append("dev.expired", None, request_id=req["request_id"])
         return req["status"] == "expired"
 
@@ -92,6 +94,7 @@ class DevGate:
                      count=len(req["approvals"]), required=req["approvals_required"], reason=reason)
         if len(req["approvals"]) >= req["approvals_required"]:
             req["status"] = "approved"
+        self.store.put(req)
         return self._public(req)
 
     def deny(self, rid: str, approver: str, reason: str = "") -> dict:
@@ -99,6 +102,7 @@ class DevGate:
         if req["status"] not in ("pending", "approved"):
             raise GateError(409, f"request is {req['status']}")
         req["status"] = "denied"
+        self.store.put(req)
         audit.append("dev.denied", approver, request_id=rid, reason=reason)
         return self._public(req)
 
@@ -121,7 +125,10 @@ class DevGate:
         ad = self.adapters.get(req["action"])
         if ad is None:
             raise GateError(501, f"no adapter configured for {req['action']!r}")
-        req["status"] = "executed"  # claim before running: at most once
+        prev = req["status"]
+        req["status"] = "executed"  # claim (atomic, persisted) before running: at most once
+        if not self.store.claim(req, prev):
+            raise GateError(409, "concurrent execution detected; not running twice")
         audit.append("dev.execute.claimed", caller, request_id=rid, payload_hash=h)
         try:
             result = ad.execute(req["action"], json.loads(json.dumps(req["payload"])),
@@ -130,6 +137,8 @@ class DevGate:
         except Exception as e:
             result, err = None, f"adapter error ({type(e).__name__})"
         req["result"] = result
+        req["error"] = err
+        self.store.put(req)
         audit.append("dev.executed" if err is None else "dev.execute.failed", caller, request_id=rid,
                      simulated=getattr(ad, "simulated", True), error=err)
         return 200, {"status": "executed" if err is None else "failed", "request_id": rid, "result": result, "error": err}

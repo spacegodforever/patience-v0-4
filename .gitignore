@@ -22,3 +22,10 @@ patience_audit.jsonl.head
 policy.yaml
 policies/*.bak
 *.egg-info/
+
+# Dev-governance gate state (SQLite) and any local databases
+patience_dev_gate.db
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

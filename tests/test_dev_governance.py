@@ -248,11 +248,14 @@ def test_adapter_failure_is_audited(gate):
     assert "dev.execute.failed" in events()
 
 
-# --- HTTP router -------------------------------------------------------------------
+# --- HTTP router (injected identity; production wiring is tested in test_dev_governance_gaps.py)
 def test_router_end_to_end_status_codes(clock):
-    app = FastAPI(); app.include_router(make_router(DevGate(clock=clock)))
+    from fastapi import Header
+    def ident(x_test_user: str = Header(...)): return {"id": x_test_user, "user": x_test_user}
+    g = DevGate(clock=clock)
+    app = FastAPI(); app.include_router(make_router(lambda: g, ident, ident))
     c = TestClient(app)
-    A = {"X-Patience-User": "agent-1"}; M = {"X-Patience-User": "matthew"}
+    A = {"X-Test-User": "agent-1"}; M = {"X-Test-User": "matthew"}
     rid = c.post("/v1/dev/check", json={"action": "code.open_pr", "payload": PR}, headers=A).json()["request_id"]
     assert c.post(f"/v1/dev/requests/{rid}/execute", json={"action": "code.open_pr", "payload": PR}, headers=A).status_code == 202
     assert c.post(f"/v1/dev/requests/{rid}/approve", headers=A).status_code == 403
