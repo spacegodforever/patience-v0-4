@@ -16,7 +16,7 @@ import threading
 import time
 from typing import Callable, Optional
 
-DEFAULTS = {"window_seconds": 300, "max_high_proposals": 5, "max_anomalies": 3}
+DEFAULTS = {"window_seconds": 600, "max_high_proposals": 8, "max_anomalies": 3}  # tools/sim_breaker.py
 
 
 def kill_switch_on() -> bool:

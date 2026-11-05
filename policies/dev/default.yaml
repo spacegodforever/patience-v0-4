@@ -13,7 +13,10 @@ approvers_required: {low: 0, medium: 1, high: 1, critical: 2}
 catastrophe: {max_rows: 10000, max_resources: 10, hard_factor: 10, min_rollback_chars: 20}
 # Circuit breaker (dev_governance/breaker.py): per-agent rolling window. Over the limit the agent is
 # frozen and its requests held until a human approver resets it. PATIENCE_DEV_KILL=1 halts everything.
-breaker: {window_seconds: 300, max_high_proposals: 5, max_anomalies: 3}
+# Defaults chosen by simulation (tools/sim_breaker.py): 0 false trips on simulated benign bursts (up to
+# 7 high actions in ~5 min), all simulated runaways caught within 20 events. 5/300s tripped ~28% of
+# simulated benign sessions.
+breaker: {window_seconds: 600, max_high_proposals: 8, max_anomalies: 3}  # tuned: tools/sim_breaker.py
 actions:
   code.open_pr:        {tier: medium, category: code_change}
   code.merge_pr:       {tier: high,   category: code_change}
