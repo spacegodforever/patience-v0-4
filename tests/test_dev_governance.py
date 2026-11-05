@@ -251,7 +251,8 @@ def test_adapter_failure_is_audited(gate):
 # --- HTTP router (injected identity; production wiring is tested in test_dev_governance_gaps.py)
 def test_router_end_to_end_status_codes(clock):
     from fastapi import Header
-    def ident(x_test_user: str = Header(...)): return {"id": x_test_user, "user": x_test_user}
+    def ident(x_test_user: str = Header(...)):
+        return {"id": x_test_user, "user": x_test_user, "owners": ["owner-of-" + x_test_user]}
     g = DevGate(clock=clock)
     app = FastAPI(); app.include_router(make_router(lambda: g, ident, ident))
     c = TestClient(app)

@@ -5,6 +5,7 @@ Overlap note: feat/risk-tiers (PR #10) adds tiers to the main /v1/check path; th
 built on the shared tiers.py module so both paths use one engine after #10 merges.
 """
 from __future__ import annotations
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -54,6 +55,17 @@ class DevPolicy:
             tier, reasons, cat = rule["tier"], [f"base tier {rule['tier']}"], rule.get("category")
             for field, mapping in (rule.get("by_arg") or {}).items():
                 val = str(payload.get(field, "")).strip().lower()
+                if field == "environment":  # RT-04: normalize; unknown fails closed
+                    env = normalize_environment(payload.get(field))
+                    if env is None:
+                        tier = _max(tier, "critical")
+                        reasons.append(f"environment={val!r} unrecognized -> critical (fail closed)")
+                        continue
+                    if env == "production":
+                        tier = _max(tier, "critical")
+                        reasons.append(f"environment={val} is production -> critical")
+                        continue
+                    val = env
                 if val in mapping:
                     tier = _max(tier, mapping[val])
                     reasons.append(f"{field}={val} -> {mapping[val]}")
@@ -72,6 +84,32 @@ class DevPolicy:
                 reasons.append(f"raised to {new} by external floor")
             tier = new
         return Assessment(action, tier, cat, rule is not None, _tiers.approvals_required(tier, self.required_overrides), reasons)
+
+
+_NONPROD = {
+    "dev": "dev", "development": "dev", "local": "dev", "sandbox": "dev",
+    "test": "test", "testing": "test", "qa": "test", "ci": "test",
+    "staging": "staging", "stage": "staging", "stg": "staging", "preview": "staging",
+}
+_PROD_EXACT = {"prod", "prd", "production", "live", "main", "release", "master"}
+
+
+def normalize_environment(value: Any) -> Optional[str]:
+    """Map an environment name to dev|test|staging|production, or None if unrecognized.
+
+    Anything that looks like production (prod*, prd*, *-prod, live*, production1, prod-us ...) is
+    production. Only an explicit allowlist counts as non-production; everything else is unknown.
+    """
+    if value is None:
+        return None
+    v = str(value).strip().lower()
+    if not v:
+        return None
+    toks = [t for t in re.split(r"[^a-z0-9]+", v) if t]
+    if v in _PROD_EXACT or any(t.startswith(("prod", "prd", "live")) or t in _PROD_EXACT for t in toks) \
+            or "prod" in v:
+        return "production"
+    return _NONPROD.get(v)
 
 
 def load_policy(path: Optional[str | Path] = None) -> DevPolicy:

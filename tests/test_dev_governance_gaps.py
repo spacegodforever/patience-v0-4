@@ -81,9 +81,10 @@ def test_claim_is_compare_and_set(tmp_path):
     g = DevGate(store=s, clock=Clock())
     rid = g.propose("code.open_pr", PR, "agent-1")["request_id"]
     g.approve(rid, "matthew")
-    req = s.get(rid); req["status"] = "executed"
-    assert s.claim(dict(req), "approved") is True
-    assert s.claim(dict(req), "approved") is False
+    req = s.get(rid); stale = dict(req); req["status"] = "executing"
+    assert s.cas(req) is True
+    stale["status"] = "denied"
+    assert s.cas(stale) is False  # stale version cannot overwrite the claim
 
 
 def test_schema_version_and_migration_from_v0(tmp_path):
@@ -135,6 +136,7 @@ def secured(monkeypatch):
     monkeypatch.delenv("PATIENCE_DEV_OPEN", raising=False)
     monkeypatch.delenv("PATIENCE_LEGACY_APPROVER_TOKEN", raising=False)
     monkeypatch.setenv("PATIENCE_API_TOKEN", "agent-token-0123456789")
+    monkeypatch.setenv("PATIENCE_API_TOKEN_OWNERS", "token-owner")
     approvers.add("matthew", "matthew-password-1", "approver")
     approvers.add("default", "default-password-1", "approver")  # same name as the token caller id
     return TestClient(api.app)

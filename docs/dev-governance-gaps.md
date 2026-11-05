@@ -110,3 +110,17 @@ Live adapters (3) come last and only behind everything above.
 - PR #10 (`feat/risk-tiers`): see gap 4.
 - PR #12 (`fix/outbound-requires-approval`): not needed; no overlap in files.
 - `feat/threat-checker` (local): its tier feeds `assess(..., floor=...)`.
+
+## Red-team fixes (Hacksaw review of b97aab9, branch fix/dev-governance-redteam)
+
+| Finding | Fix | Regression tests (tests/test_dev_governance_redteam.py) |
+|---|---|---|
+| RT-01 critical: blind INSERT OR REPLACE | Schema v2 adds `version`; all writes are CAS (`UPDATE ... WHERE version=? AND status NOT IN terminal`); inserts never replace; execute claims `executing`; one shared SqliteStore per process; new DB chmod 0600 | test_rt01_* |
+| RT-02 high: approve RMW | approve/deny/expire run in a re-read/re-validate CAS retry loop; concurrent approvals all land | test_rt02_* |
+| RT-03 high: owner self-approval | `owners` recorded at propose (agents.yaml `owners:`/`owner:`, token mode `PATIENCE_API_TOKEN_OWNERS`); owners get 403 (`owner_of_proposer`); non-low proposals without an owner mapping are refused (403) except in PATIENCE_DEV_OPEN dev mode | test_rt03_* |
+| RT-04 high: environment aliases | `normalize_environment`: anything prod/prd/live-like -> production -> critical; only an allowlist (dev/test/qa/staging...) is non-prod; missing/unknown env -> critical | test_rt04_* |
+| RT-05 high: MemoryStore TOCTOU | MemoryStore is lock-protected CAS | test_rt05_* |
+| RT-06 high: hash canonicalization | strict canonical JSON (no default=str, no NaN, string keys); 422 on non-JSON; hash computed from the stored body | test_rt06_* |
+| RT-12 medium (fixed in passing) | execute claims only from allowed(0 required)/approved(with enough distinct approvals) | test_rt12_* |
+
+Still open: RT-07, RT-08, RT-10, RT-11, RT-13, RT-14, RT-15 (RT-09 partly: chmod on create only).
