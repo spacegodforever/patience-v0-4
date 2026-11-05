@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional
 import audit
 from .policy import DevPolicy, load_policy
 from .adapters import Adapter, default_adapters
+from . import claims as _claims
 from .store import MemoryStore, default_store
 
 
@@ -206,9 +207,13 @@ class DevGate:
         rid = req["request_id"]
         ad = self.adapters[req["action"]]
         audit.append("dev.execute.claimed", caller, request_id=rid, payload_hash=h)
+        ctx = {"request_id": rid, "caller": caller}
+        if getattr(ad, "live", False):  # RT-10: live adapters need a fresh single-use claim token
+            ctx["claim_token"] = _claims.mint(rid, h)  # real time: adapters verify against real time
+            ctx["payload_hash"] = h
         try:
             result = ad.execute(req["action"], json.loads(json.dumps(req["payload"])),
-                                {"request_id": rid, "caller": caller})
+                                ctx)
             err = None
         except Exception as e:
             result, err = None, f"adapter error ({type(e).__name__})"
