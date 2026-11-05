@@ -15,6 +15,7 @@ class ProposeIn(BaseModel):
     action: str = Field(..., min_length=1, max_length=100)
     payload: Dict[str, Any] = Field(default_factory=dict)
     text: Optional[str] = Field(None, max_length=4000)
+    authority_grant: Optional[str] = Field(None, max_length=100)
 
 
 class DecideIn(BaseModel):
@@ -67,7 +68,7 @@ def make_router(gate_factory: Callable[[], DevGate], caller_dep: Callable, appro
                                                    floor=t["floor"],
                                                    owners=owners_of(caller),
                                                    require_owners=caller.get("mode") != "dev",
-                                                   text=body.text))
+                                                   text=body.text, authority_grant=body.authority_grant))
 
     @r.get("/requests/{rid}")
     def status(rid: str, caller: dict = Depends(caller_dep)):

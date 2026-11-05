@@ -24,6 +24,8 @@ actions:
   code.force_push:     {tier: critical, category: code_change}
   ci.run:              {tier: low,    category: ci}
   ci.rerun_failed:     {tier: low,    category: ci}
+  # Known for policy assessment only; DevGate requires a scoped human grant. No default executor.
+  test.run_isolated:   {tier: low,    category: test}
   deploy.release:
     tier: medium
     category: deploy

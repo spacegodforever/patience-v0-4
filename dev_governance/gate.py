@@ -21,6 +21,7 @@ from . import destructive as _destructive
 from . import breaker as _breaker
 import tiers as _tiers
 from .store import MemoryStore, default_store
+from .authority import AuthorityError
 
 
 class GateError(Exception):
@@ -61,13 +62,14 @@ _MAX_CAS_RETRIES = 50
 
 class DevGate:
     def __init__(self, policy: Optional[DevPolicy] = None, adapters: Optional[list[Adapter]] = None,
-                 clock: Callable[[], float] = time.time, store=None, breaker=None):
+                 clock: Callable[[], float] = time.time, store=None, breaker=None, authority=None):
         self.policy = policy or load_policy()
         self.adapters: dict[str, Adapter] = {}
         for a in (adapters if adapters is not None else default_adapters()):
             for act in a.actions:
                 self.adapters[act] = a
         self.clock = clock
+        self.authority = authority
         self.store = store if store is not None else MemoryStore()
         spath = getattr(self.store, "path", None)
         if spath and spath != ":memory:":
@@ -103,14 +105,32 @@ class DevGate:
     # 1. propose + 2. policy
     def propose(self, action: str, payload: dict, proposer: str, floor: Optional[str] = None,
                 owners: Optional[list] = None, require_owners: bool = False,
-                text: Optional[str] = None) -> dict:
+                text: Optional[str] = None, authority_grant: Optional[str] = None) -> dict:
         """owners: human approver usernames responsible for `proposer` (RT-03); they may not approve.
         require_owners: fail closed if a non-low request has no owner mapping."""
         action = (action or "").strip().lower()
         if not proposer:
             raise GateError(400, "proposer is required")
         self._halt_checks(proposer, "propose")
+        owners = sorted({str(o).strip() for o in (owners or []) if str(o).strip()})
+        # A risk tier classifies impact; it does not grant capability. Only this new isolated-test
+        # action uses an explicit grant, leaving legacy CI policy unchanged pending human review.
+        if action == "test.run_isolated":
+            if self.authority is None:
+                audit.append("dev.authority.refused", proposer, action=action, reason="no_authority_store")
+                raise GateError(403, "a human-granted isolated test capability is required")
+            try:
+                self.authority.require(grant_id=authority_grant, actor=proposer, action=action,
+                                       payload=payload or {}, owners=owners,
+                                       request_expires_at=self.clock() + self.policy.ttl)
+            except AuthorityError as e:
+                audit.append("dev.authority.refused", proposer, action=action, reason=e.message)
+                raise GateError(e.status, e.message)
         stored = json.loads(canonical_json(payload or {}))  # 422 on non-JSON values (RT-06)
+        if authority_grant is not None:
+            if action != "test.run_isolated" or not isinstance(authority_grant, str) or not authority_grant.strip():
+                raise GateError(422, "authority_grant is accepted only for test.run_isolated")
+            stored["authority_grant"] = authority_grant.strip()
         ad = self.adapters.get(action)
         if ad is not None and hasattr(ad, "validate"):
             try:
@@ -137,7 +157,6 @@ class DevGate:
             a.tier = raised
             a.approvals_required = max(a.approvals_required,
                                        _tiers.approvals_required(raised, self.policy.required_overrides))
-        owners = sorted({str(o).strip() for o in (owners or []) if str(o).strip()})
         if require_owners and not owners and a.approvals_required > 0:
             audit.append("dev.propose.rejected", proposer, action=action, reason="no_owner_mapping")
             raise GateError(403, "proposer has no owner mapping; non-low dev actions are refused (set owners)")
@@ -258,6 +277,16 @@ class DevGate:
             audit.append("dev.payload_mismatch", caller, request_id=rid, expected=req["payload_hash"], got=h)
             raise GateError(409, "action/payload differ from the approved request; a new approval is required")
         self._halt_checks(req["proposer"], "execute")
+        if req["action"] == "test.run_isolated":
+            if self.authority is None:
+                raise GateError(403, "a human-granted isolated test capability is required")
+            try:
+                self.authority.require(grant_id=req["payload"].get("authority_grant"),
+                                       actor=req["proposer"], action=req["action"], payload=req["payload"],
+                                       owners=req.get("owners") or [], request_expires_at=req["expires_at"])
+            except AuthorityError as e:
+                audit.append("dev.authority.refused", caller, request_id=rid, reason=e.message)
+                raise GateError(e.status, e.message)
         allowed = {req["proposer"]}
         if self.policy.data.get("execute_by", "proposer_or_owner") == "proposer_or_owner":
             allowed |= set(req.get("owners") or [])
