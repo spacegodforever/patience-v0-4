@@ -10,6 +10,7 @@ def _isolate(tmp_path, monkeypatch):
     """Every test gets its own audit log / approvers file; no test touches repo-local files.
     Pre-v0.6 tests use the shared approver token, which now needs the explicit legacy flag."""
     monkeypatch.setenv("PATIENCE_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv("PATIENCE_DEV_GATE_DB", str(tmp_path / "dev_gate.db"))
     monkeypatch.setenv("PATIENCE_APPROVERS", str(tmp_path / "approvers.yaml"))
     monkeypatch.setenv("PATIENCE_LEGACY_APPROVER_TOKEN", "1")
     monkeypatch.setenv("PATIENCE_LINK_SECRET", "test-link-secret-0123456789abcdef")

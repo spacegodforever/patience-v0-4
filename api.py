@@ -627,6 +627,22 @@ async def link_submit(token: str, request: Request):
     return _page("Done", f"<p>Request <b>{_html.escape(out['status'])}</b> by {_html.escape(who['user'])}.</p>")
 
 
+
+# --------------------------------------------------------------------------
+# Dev governance: development actions (PRs, deploys, migrations, ...) through the same gate.
+# Proposers authenticate with require_caller; approvals need a human approver (require_approver).
+from dev_governance import DevGate as _DevGate
+from dev_governance.router import make_router as _make_dev_router
+from dev_governance.store import default_store as _dev_store
+
+
+def dev_gate() -> _DevGate:
+    return _DevGate(store=_dev_store())
+
+
+app.include_router(_make_dev_router(lambda: dev_gate(), require_caller, require_approver))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host=os.environ.get("PATIENCE_API_HOST", "127.0.0.1"),

@@ -1,0 +1,36 @@
+# Dev-governance policy pack. Tiers: low < medium < high < critical.
+# low = auto-allow; medium/high = one human approver; critical = two distinct approvers.
+# Any action not listed here fails closed (needs approval at "high"; never auto-allowed).
+version: 1
+approval_ttl_seconds: 3600
+unknown_action_tier: high
+approvers_required: {low: 0, medium: 1, high: 1, critical: 2}
+actions:
+  code.open_pr:        {tier: medium, category: code_change}
+  code.merge_pr:       {tier: high,   category: code_change}
+  code.push_branch:    {tier: medium, category: code_change}
+  code.force_push:     {tier: critical, category: code_change}
+  ci.run:              {tier: low,    category: ci}
+  ci.rerun_failed:     {tier: low,    category: ci}
+  deploy.release:
+    tier: medium
+    category: deploy
+    by_arg: {environment: {staging: medium, prod: critical, production: critical}}
+  deploy.rollback:
+    tier: high
+    category: deploy
+    by_arg: {environment: {prod: critical, production: critical}}
+  db.migrate:
+    tier: high
+    category: db_migration
+    by_arg: {environment: {prod: critical, production: critical}}
+  infra.apply:
+    tier: high
+    category: infra
+    by_arg: {environment: {prod: critical, production: critical}}
+  secrets.read:        {tier: high,   category: secrets}
+  secrets.rotate:      {tier: critical, category: secrets}
+  spend.charge:
+    tier: high
+    category: spend
+    over_amount: {field: amount_usd, threshold: 500, tier: critical}
