@@ -30,9 +30,58 @@ class Assessment:
     reasons: list
 
 
+# RT-14: code-level floors. Policy YAML may raise these, never lower them (or drop the action).
+ACTION_FLOORS = {
+    **{a: "critical" for a in ("db.drop", "db.truncate", "db.delete_rows", "repo.delete", "code.force_push",
+                               "data.wipe", "infra.destroy", "secrets.rotate")},
+    **{a: "high" for a in ("code.merge_pr", "deploy.rollback", "db.migrate", "infra.apply", "secrets.read",
+                           "spend.charge")},
+    "deploy.release": "medium",
+}
+# catastrophe limits: (key, bound, "max" = YAML may not exceed / "min" = YAML may not go below)
+CATASTROPHE_BOUNDS = (("max_rows", 10000, "max"), ("max_resources", 10, "max"), ("hard_factor", 10, "max"),
+                      ("min_rollback_chars", 20, "min"))
+BREAKER_BOUNDS = (("window_seconds", 60, "min"), ("max_high_proposals", 50, "max"), ("max_anomalies", 20, "max"))
+EXECUTE_BY = ("proposer", "proposer_or_owner")
+
+
+def _clamp(section: dict, bounds, where: str, notes: list) -> dict:
+    out = dict(section or {})
+    for k, bound, kind in bounds:
+        if k not in out:
+            continue
+        try:
+            v = float(out[k])
+        except (TypeError, ValueError):
+            v = float("inf") if kind == "max" else float("-inf")
+        if (kind == "max" and v > bound) or (kind == "min" and v < bound) or v != v:
+            notes.append(f"{where}.{k}={out[k]!r} is looser than the floor; clamped to {bound}")
+            out[k] = bound
+    return out
+
+
 class DevPolicy:
     def __init__(self, data: dict):
-        self.data = data or {}
+        self.data = dict(data or {})
+        self.floor_violations: list = []
+        acts = {k: dict(v or {}) for k, v in (self.data.get("actions") or {}).items()}
+        for act, floor in ACTION_FLOORS.items():
+            rule = acts.get(act)
+            if rule is None:
+                continue  # missing -> assess() still applies the floor
+            if rule.get("tier") in TIERS and TIERS.index(rule["tier"]) < TIERS.index(floor):
+                self.floor_violations.append(f"actions.{act}.tier={rule['tier']} below floor {floor}; raised")
+                rule["tier"] = floor
+        self.data["actions"] = acts
+        self.data["catastrophe"] = _clamp(self.data.get("catastrophe"), CATASTROPHE_BOUNDS, "catastrophe",
+                                          self.floor_violations)
+        self.data["breaker"] = _clamp(self.data.get("breaker"), BREAKER_BOUNDS, "breaker", self.floor_violations)
+        if self.data.get("execute_by", "proposer_or_owner") not in EXECUTE_BY:
+            self.floor_violations.append(f"execute_by={self.data.get('execute_by')!r} invalid; using proposer")
+            self.data["execute_by"] = "proposer"
+        if self.floor_violations:
+            import audit
+            audit.append("dev.policy.floor_enforced", None, violations=self.floor_violations)
         self.actions = self.data.get("actions") or {}
         self.ttl = int(self.data.get("approval_ttl_seconds", 3600))
         self.unknown_tier = self.data.get("unknown_action_tier", "high")
@@ -78,6 +127,10 @@ class DevPolicy:
                 if amt > float(oa["threshold"]):
                     tier = _max(tier, oa["tier"])
                     reasons.append(f"{oa['field']} over {oa['threshold']} -> {oa['tier']}")
+        hard = ACTION_FLOORS.get(action)
+        if hard and _tiers.rank(tier) < _tiers.rank(hard):  # RT-14 (also if the YAML omits the action)
+            reasons.append(f"code floor for {action}: {hard}")
+            tier = hard
         if floor is not None:  # e.g. a threat-assessment result: can only raise, never lower
             new = _tiers.raise_only(tier, floor)
             if new != tier:

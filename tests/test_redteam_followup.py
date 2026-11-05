@@ -177,3 +177,53 @@ def test_rt13_legacy_token_never_approves_dev_requests(monkeypatch, tmp_path):
     assert c.post(f"/v1/dev/requests/{rid}/approve", headers=h).status_code == 403
     assert c.post("/v1/dev/breaker/bot/reset", headers=h).status_code == 403
     assert "auth.legacy_token_refused" in events()
+
+
+# ---- RT-14: policy YAML cannot weaken floors -------------------------------------------
+from dev_governance.policy import DevPolicy, load_policy
+
+
+def _pol(**over):
+    d = load_policy().data
+    d = {**d, **over}
+    return DevPolicy(d)
+
+
+def test_rt14_yaml_cannot_lower_destructive_or_high_risk_actions():
+    acts = dict(load_policy().data["actions"])
+    acts.update({"db.drop": {"tier": "low"}, "code.force_push": {"tier": "medium"},
+                 "code.merge_pr": {"tier": "low"}, "spend.charge": {"tier": "low"}})
+    p = _pol(actions=acts)
+    assert p.assess("db.drop", {}).tier == "critical"
+    assert p.assess("code.force_push", {}).tier == "critical"
+    assert p.assess("code.merge_pr", {}).tier == "high"
+    assert p.assess("spend.charge", {}).tier == "high"
+    assert len(p.floor_violations) == 4
+    assert "dev.policy.floor_enforced" in events()
+
+
+def test_rt14_omitting_action_keeps_floor():
+    acts = {k: v for k, v in load_policy().data["actions"].items() if k != "repo.delete"}
+    p = _pol(actions=acts, unknown_action_tier="high")
+    a = p.assess("repo.delete", {})
+    assert a.tier == "critical" and a.approvals_required >= 2
+
+
+def test_rt14_yaml_can_raise_floors():
+    acts = dict(load_policy().data["actions"]); acts["ci.run"] = {"tier": "high"}
+    assert _pol(actions=acts).assess("ci.run", {}).tier == "high"
+
+
+def test_rt14_catastrophe_and_breaker_limits_cannot_be_loosened():
+    p = _pol(catastrophe={"max_rows": 10 ** 9, "max_resources": 999, "hard_factor": 1000, "min_rollback_chars": 1},
+             breaker={"window_seconds": 1, "max_high_proposals": 10 ** 6, "max_anomalies": 10 ** 6},
+             execute_by="anyone")
+    c, b = p.data["catastrophe"], p.data["breaker"]
+    assert (c["max_rows"], c["max_resources"], c["hard_factor"], c["min_rollback_chars"]) == (10000, 10, 10, 20)
+    assert (b["window_seconds"], b["max_high_proposals"], b["max_anomalies"]) == (60, 50, 20)
+    assert p.data["execute_by"] == "proposer"
+
+
+def test_rt14_tighter_limits_are_kept():
+    p = _pol(catastrophe={"max_rows": 100, "max_resources": 2, "hard_factor": 3, "min_rollback_chars": 40})
+    assert p.data["catastrophe"]["max_rows"] == 100 and not p.floor_violations
