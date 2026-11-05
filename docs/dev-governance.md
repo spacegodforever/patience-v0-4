@@ -6,16 +6,26 @@ No adapter on this branch touches a real system or the network.
 ## Flow
 
 ```
-propose -> policy (risk tier) -> human approval -> execute (bound to payload hash) -> audit
+propose -> policy tier (+ code floors, server threat floor, destructive guard, advisory,
+ambiguity analysis, breaker) -> human approval -> execute (proposer/owner only, payload hash,
+single-use claim token) -> audit
 ```
+
+See `docs/catastrophe-guard.md` for the destructive guard, circuit breaker, advisory report and
+language ambiguity analyzer.
 
 1. **Propose** – an agent submits `action` + `payload` (`DevGate.propose`, or `POST /v1/dev/check`).
 2. **Policy** – `policies/dev/default.yaml` assigns a tier: `low`, `medium`, `high`, `critical`.
-   Tiers come from set rules, not a statistical model. A threat-assessment result (or other
-   external signal) may be passed as a *floor*: it can only raise the tier, never lower it.
+   Tiers come from set rules, not a statistical model. On `POST /v1/dev/check` the server computes
+   its own threat floor from the request text and payload (`dev_governance/threat.py`, same
+   classifier as `/v1/check`; RT-11). Clients cannot supply or lower it. Code-level floors
+   (`ACTION_FLOORS` in `policy.py`; RT-14) stop the YAML from lowering destructive or high-risk
+   actions, even by leaving them out, and from loosening catastrophe or breaker limits.
 3. **Approval** – `low` runs without a human; `medium`/`high` need one approver; `critical` needs
-   two distinct approvers. The proposer can never approve their own request. Approvals expire
-   after `approval_ttl_seconds` (default 3600).
+   two distinct approvers. Neither the proposer nor its owners can approve. Approvals expire
+   after `approval_ttl_seconds` (default 3600). The expiry is HMAC-bound to the request (RT-08).
+   An edited or missing signature, or a window longer than the TTL, expires the request (fail
+   closed, `dev.expiry.tampered`).
 4. **Execute** – the caller must resend the exact action and payload. The SHA-256 of the
    canonical action+payload must match what was approved, else **409**. Executing before enough
    approvals returns **202** (`pending_approval`). Each approval executes at most once.
@@ -40,6 +50,7 @@ propose -> policy (risk tier) -> human approval -> execute (bound to payload has
 | Infra | `infra.apply` / prod | high / critical |
 | Secrets | `secrets.read` / `secrets.rotate` | high / critical |
 | Spend | `spend.charge` (>$500 or unparseable amount → critical) | high |
+| Destructive | `db.drop/truncate/delete_rows`, `repo.delete`, `data.wipe`, `infra.destroy` | **critical** (+ destructive guard) |
 | **Unknown** | anything not listed | **high, fail closed** (policy cannot set it to low) |
 
 Unknown actions also have no adapter, so even after approval they return **501** and do nothing.
@@ -65,8 +76,14 @@ Adapter exceptions are audited as `dev.execute.failed` without echoing the excep
 
 ## Known limits / what's left
 
-- Gate state is in memory per `DevGate` instance; not yet persisted in engine state.
-- `dev_governance/router.py` is not mounted in `api.py`, and its identity header
-  (`X-Patience-User`) is for tests only; integration must use `require_caller` / `require_approver`.
-- No live adapters. Real GitHub/deploy adapters need credential handling and a dry-run default.
-- Tier cutoffs (e.g. $500) are judgment calls, not measured.
+- Gate state persists in SQLite (`PATIENCE_DEV_GATE_DB`). DB files, WAL/SHM sidecars and the
+  key file are kept at 0600, including files that already existed (RT-09).
+- `dev_governance/router.py` is mounted in `api.py` under `/v1/dev`, and uses
+  `require_caller` / `require_approver`. The deprecated shared legacy approver token is never
+  accepted there (RT-13).
+- Live adapters: only `feat/github-adapter` (not on this branch). It is dry-run by default and
+  needs a single-use claim token.
+- Signing keys: `PATIENCE_CLAIM_SECRET` (≥32 chars) is recommended. Without it, a shared 0600
+  key file `<gate db>.key` is used. Anyone who can read that file can sign expiries and claims.
+- Tier cutoffs (e.g. $500) are judgment calls. Breaker defaults were tuned on simulated workloads
+  only (`tools/sim_breaker.py`), not on real traffic.

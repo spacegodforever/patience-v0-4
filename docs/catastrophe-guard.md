@@ -18,9 +18,14 @@ When the gate claims a request, it mints `v1.<rid>.<payload_hash>.<exp>.<nonce>.
 passes it to the adapter. The token:
 - is single-use (nonce is burned when verified);
 - is bound to that request ID and payload hash;
-- lives 60 s;
-- is signed with HMAC-SHA256 using `PATIENCE_CLAIM_SECRET` (≥32 chars, otherwise a random
-  per-process key).
+- lives 60 s, with up to `PATIENCE_CLAIM_SKEW` seconds of clock skew tolerated (default 5,
+  max 30). Expiries further in the future than TTL + skew are refused;
+- is signed with HMAC-SHA256 using `PATIENCE_CLAIM_SECRET` (≥32 chars). Without it, the key is a
+  shared 0600 file `<gate db>.key`, or a random per-process key for in-memory gates.
+
+Used nonces are recorded in memory and in the shared SQLite table `dev_claim_nonces`, via an
+atomic primary-key insert. A token used by one worker is therefore refused by every other
+worker. If the nonce store errors, the token is refused (fail closed).
 
 Live adapters (`live=True`) must call `claims.verify_claim(ctx, payload_hash)` themselves,
 before any I/O, using a hash they recompute from what they are about to send. A missing,
@@ -50,9 +55,9 @@ and `dev.destructive.refused` is audited.
 All of this is configured under `catastrophe:`.
 
 ## 4. Circuit breaker and kill switch (`dev_governance/breaker.py`)
-The breaker works per agent, over a rolling window (default 300 s). It trips when the agent
+The breaker works per agent, over a rolling window (default 600 s). It trips when the agent
 goes past either limit:
-- more than `max_high_proposals` (default 5) high or critical proposals;
+- more than `max_high_proposals` (default 8) high or critical proposals;
 - more than `max_anomalies` (default 3) refused or destructive-guard failures.
 
 **When it trips:**
@@ -68,6 +73,27 @@ goes past either limit:
 
 **Global kill switch.** `PATIENCE_DEV_KILL=1` makes every propose, approve, and execute call
 return **503**.
+
+**Tuning (simulated, `tools/sim_breaker.py`).** Grid search picked the defaults on tuning seeds,
+and they were then measured on separate held-out seeds (200 sessions per workload):
+
+| Config | False trips on benign sessions | Runaways caught within 20 events | Median events to trip |
+|---|---|---|---|
+| old 300 s / 5 / 3 | 30% (release trains 58.5%, batch migrations 61.5%) | 100% | 3–7 |
+| **new 600 s / 8 / 3** | **0%** | **100%** | 3–9 (slow drip: 9 events, ~5 min) |
+
+The benign workloads are release trains, steady work, batches of up to 7 migrations, and sloppy
+retries. The runaways are a tight loop, a slow drip, a refusal loop, and mixed spray. These
+shapes are assumptions, and the clean separation partly reflects that. The margin is thin: at
+8 high proposals, a benign burst of 9 or more within 10 minutes would trip it.
+
+**Blast radius.** The defaults stay at 10 000 rows and hard factor 10. The policy floors (RT-14)
+cap them there; they can only be tightened. In simulation (lognormal targeted cleanups vs.
+whole-table runaways):
+- 10 000/10: 3.2% of benign operations need 3 approvers, 0% are refused, and 99.9% of runaways
+  are refused.
+- 5 000/10: benign 3-approver rate rises to 8.5%, and 0.2% of benign operations are refused,
+  with no runaway gain.
 
 ## 5. Advisory report (`dev_governance/advisory.py`)
 A deterministic report is attached as `advisory` to every request that needs approval. It
@@ -87,6 +113,44 @@ contains these fields:
 for irreversible actions or high for partially reversible ones. It can never lower the tier.
 
 ## 6. Language ambiguity analyzer (`dev_governance/ambiguity.py`, rules in `policies/dev/ambiguity.yaml`)
+
+**v2 evasion hardening.** Text is normalized first:
+- NFKC;
+- zero-width and format characters stripped;
+- case folded;
+- Cyrillic and Greek homoglyphs and leetspeak folded;
+- spaced or dotted letters re-joined.
+
+Matching then works per token, with bounded typo tolerance: 1 edit for words of 5+ letters,
+2 edits for 9+; shorter words are never fuzzed. On top of that:
+- Synonyms map to the canonical verbs.
+- Negated destructive wording ("don't delete anything") does not count as acknowledgement, and
+  is a mismatch when the payload is destructive.
+- Free-text payload fields (`note`, `description`…) are scanned with the text.
+- An ambiguous verb is no longer treated as acknowledging a destructive payload.
+- New mismatch checks: wrong table, and partial-scope wording against a whole-object action.
+
+**Scoring.** Signals add YAML `weights`, and `thresholds` map the score to a tier. Any mismatch
+is always critical.
+
+**Measured on `tests/data/ambiguity_corpus.yaml`** (137 cases, fixed split by sha256(id) mod 3).
+"Flagged" means floor ≥ high or a mismatch warning:
+
+| Split | Risky caught (recall) | False positives on benign | Precision |
+|---|---|---|---|
+| v1 baseline, dev | 43/54 (0.796) | 0/35 | 1.0 |
+| v1 baseline, holdout | 19/23 (0.826) | 1/25 | 0.95 |
+| **v2, dev (tuned on)** | **53/54 (0.981)** | **0/35** | 1.0 |
+| **v2, holdout (not tuned on)** | **21/23 (0.913)** | **0/25** | 1.0 |
+
+The remaining misses are honest-sounding wording with a vague or different object: "shred the
+archive", "nuke the staging data", and "D.R.O.P the table" against a different table.
+
+Caveats:
+- The corpus was written by the same author as the rules, so even the holdout is not
+  independent.
+- The baseline holdout errors were seen once before tuning began.
+- Run `python tools/eval_ambiguity.py` to reproduce.
 **Input.** The optional `text` on `POST /v1/dev/check` (or `propose(..., text=)`), plus the
 payload.
 
@@ -108,7 +172,10 @@ payload.
 `PATIENCE_AMBIGUITY_RULES` to point at a different file.
 
 ## Known gaps
-- Claim nonces are kept in memory, per process. Multiple workers need a shared nonce store.
-- The analyzer matches keywords, not meaning. An adversary can word around it, which is why
-  it can only add friction and never remove it.
-- RT-08, RT-09 (partial), RT-11, RT-13, RT-14, RT-15 remain open.
+- The analyzer matches keywords, not meaning. Paraphrase, other languages, and splitting a word
+  across fields can still get past it, which is why it can only add friction and never remove
+  it. The corpus is small (137 cases) and was written in-house.
+- Breaker and blast-radius tuning is based on simulated workloads only.
+- Anyone who can read the key file can forge expiry signatures. Use `PATIENCE_CLAIM_SECRET`
+  from a secret store.
+- No Hacksaw findings are open on this branch.

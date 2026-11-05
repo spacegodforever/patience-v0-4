@@ -48,6 +48,14 @@ any unknown tool, and any high-consequence action requires a human approver. The
 (no individual identity), and each use writes an `auth.legacy_token_used` audit event.
 Use per-approver accounts in `approvers.yaml`.
 
+Restrictions (RT-13):
+- It is off unless explicitly enabled.
+- The token must be at least 32 characters, otherwise it is refused (fail closed).
+- It is **never** accepted on `/v1/dev/*` (approve, deny, breaker reset). Such attempts get 403
+  and are audited as `auth.legacy_token_refused`.
+
 ## Known limits
 * Approver identity is a local username/password/PIN; it is not yet independently verified (no SSO/IdP).
-* Single API process: state, locks and throttles are per process; do not scale the api service.
+* Single API process for the main `/v1/check` engine: its state, locks and throttles are per process.
+  The dev gate (`/v1/dev`) stores requests, breaker state and used claim nonces in its shared
+  SQLite DB, so its claim tokens cannot be reused across workers.

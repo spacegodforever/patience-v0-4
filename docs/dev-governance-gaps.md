@@ -123,4 +123,18 @@ Live adapters (3) come last and only behind everything above.
 | RT-06 high: hash canonicalization | strict canonical JSON (no default=str, no NaN, string keys); 422 on non-JSON; hash computed from the stored body | test_rt06_* |
 | RT-12 medium (fixed in passing) | execute claims only from allowed(0 required)/approved(with enough distinct approvals) | test_rt12_* |
 
-Still open: RT-07, RT-08, RT-10, RT-11, RT-13, RT-14, RT-15 (RT-09 partly: chmod on create only).
+Follow-up on `feat/catastrophe-guard`:
+
+| Finding | Fix | Tests |
+|---|---|---|
+| RT-07 | execute bound to proposer (or owner per `execute_by`); others 403 + `dev.execute.forbidden` | test_catastrophe_guard.py test_rt07_* |
+| RT-08 | request expiry HMAC-bound (`expiry_sig`); tampered/missing/over-TTL → expired (`dev.expiry.tampered`); claim tokens tolerate ≤`PATIENCE_CLAIM_SKEW` (default 5 s, max 30 s) skew and refuse far-future expiries | test_redteam_followup.py test_rt08_* |
+| RT-09 | DB, WAL/SHM, breaker DB and key file re-permissioned to 0600 on every open (existing files too) | test_rt09_* |
+| RT-10 | single-use, request+payload-bound HMAC claim tokens; used nonces persisted in the shared SQLite DB | test_catastrophe_guard.py test_rt10_*, test_claim_* |
+| RT-11 | server-side threat floor on `/v1/dev/check` (text + payload), raise-only, not client-settable | test_rt11_* |
+| RT-13 | legacy shared approver token: explicit flag + ≥32 chars, never on `/v1/dev/*` | test_rt13_* |
+| RT-14 | code-level action floors; catastrophe/breaker limits and `execute_by` clamped; clamps audited | test_rt14_* |
+| RT-15 | docs refreshed (this file, dev-governance.md, SECURITY.md, catastrophe-guard.md) | — |
+
+No Hacksaw findings are open on this branch. Remaining limits are listed in
+`docs/catastrophe-guard.md`.
