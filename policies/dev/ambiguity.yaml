@@ -1,0 +1,33 @@
+# Language ambiguity rules (deterministic). Matching is case-insensitive on word boundaries.
+# The analyzer may only RAISE the tier or add warnings; it never lowers anything.
+version: ambiguity-v1
+ambiguous_verbs:
+  # verb -> interpretations ranked least -> most destructive, each with the actions it maps to
+  clean up:
+    - {meaning: "archive or tidy (no deletion)", actions: [code.open_pr, ci.run]}
+    - {meaning: "delete selected rows/files", actions: [db.delete_rows]}
+    - {meaning: "wipe the whole table/dataset", actions: [db.truncate, db.drop, data.wipe]}
+  reset:
+    - {meaning: "restart / reset state flag", actions: [ci.run, deploy.release]}
+    - {meaning: "roll back to prior version", actions: [deploy.rollback, db.migrate]}
+    - {meaning: "erase and recreate", actions: [db.truncate, db.drop, data.wipe, infra.destroy, code.force_push]}
+  remove:
+    - {meaning: "unlink / disable", actions: [code.open_pr]}
+    - {meaning: "delete specific records", actions: [db.delete_rows]}
+    - {meaning: "delete the whole resource", actions: [db.drop, repo.delete, infra.destroy, data.wipe]}
+  sync:
+    - {meaning: "pull/compare only", actions: [ci.run]}
+    - {meaning: "merge changes", actions: [code.merge_pr, infra.apply, db.migrate]}
+    - {meaning: "overwrite target to match source", actions: [code.force_push, db.truncate, data.wipe]}
+  fix:
+    - {meaning: "propose a patch for review", actions: [code.open_pr]}
+    - {meaning: "ship a change", actions: [code.merge_pr, deploy.release, db.migrate]}
+    - {meaning: "rewrite history / data in place", actions: [code.force_push, db.delete_rows, db.truncate]}
+unbounded_scope: [all, every, everything, entire, whole, prod, production, "*"]
+scope_limits: [table, repo, date, where, id, since, before, limit, only, branch]
+pressure: [urgent, immediately, asap, right now, skip review, no review, just do it, don't ask, bypass, override]
+tiers:
+  ambiguous_verb: medium
+  unbounded_scope: high
+  pressure: high
+  mismatch: critical

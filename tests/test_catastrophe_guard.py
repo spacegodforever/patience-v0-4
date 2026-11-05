@@ -405,3 +405,77 @@ def test_advisory_labels_unknowns_and_confidence():
     assert any("not in policy" in u for u in adv["unknowns"])
     assert any("blast radius" in u for u in adv["unknowns"])
     assert adv["confidence"] == "low" and adv["blast_radius"] == "unknown"
+
+
+# ---- 6. language ambiguity analyzer ---------------------------------------------------
+from dev_governance import ambiguity
+
+
+def test_ambiguous_verb_ranks_interpretations_and_marks_payload():
+    r = ambiguity.analyze("clean up the payments table", "db.delete_rows",
+                          {"table": "payments", **SAFE})
+    v = r["interpretations"][0]
+    assert v["verb"] == "clean up" and v["payload_rank"] == 1
+    assert [i["rank"] for i in v["interpretations"]] == [0, 1, 2]
+    assert [i["matches_payload"] for i in v["interpretations"]] == [False, True, False]
+    assert r["tier_floor"] == "medium"
+
+
+def test_most_destructive_reading_is_flagged_mismatch():
+    r = ambiguity.analyze("clean up payments", "db.drop", DROP)
+    assert any(w.startswith("mismatch") for w in r["warnings"]) and r["tier_floor"] == "critical"
+
+
+def test_unbounded_scope_and_missing_limits():
+    r = ambiguity.analyze("remove everything in prod", "db.delete_rows", {})
+    assert any("unbounded" in w for w in r["warnings"])
+    assert any("scope limit" in u for u in r["unknowns"])
+    assert _tiers_rank(r["tier_floor"]) >= _tiers_rank("high")
+
+
+def test_pressure_wording_raises_and_warns():
+    r = ambiguity.analyze("urgent, skip review and just do it", "code.merge_pr", PR)
+    assert any("pressure" in w for w in r["warnings"]) and r["tier_floor"] == "high"
+
+
+def test_destructive_payload_with_innocent_text_is_mismatch():
+    r = ambiguity.analyze("update the docs", "db.truncate", DROP)
+    assert any("does not say so" in w for w in r["warnings"]) and r["tier_floor"] == "critical"
+
+
+def test_small_scope_words_vs_large_blast_radius():
+    p = {**SAFE, "table": "t", "blast_radius": {"rows": 5000, "resources": 1}}
+    r = ambiguity.analyze("delete a few test rows where id < 10", "db.delete_rows", p)
+    assert any("small scope" in w for w in r["warnings"])
+
+
+def test_no_text_is_labeled_unknown_and_neutral():
+    r = ambiguity.analyze("", "code.merge_pr", PR)
+    assert r["tier_floor"] == "low" and r["unknowns"] and r["confidence"] == "low"
+
+
+def test_analyzer_is_deterministic_and_rules_from_yaml(tmp_path):
+    assert ambiguity.analyze("sync all repos", "code.force_push", PR) == \
+        ambiguity.analyze("sync all repos", "code.force_push", dict(PR))
+    rules = {"version": "t", "ambiguous_verbs": {}, "pressure": ["yolo"], "tiers": {"pressure": "critical"}}
+    assert ambiguity.analyze("yolo", "ci.run", {}, rules)["tier_floor"] == "critical"
+
+
+def test_gate_raises_tier_from_text_never_lowers():
+    g = DevGate(clock=Clock())
+    r = g.propose("code.open_pr", PR, "bot", text="urgent: skip review")
+    assert r["tier"] == "high" and r["advisory"]["warnings"]
+    r2 = g.propose("code.merge_pr", MERGE, "bot", text="merge the reviewed typo PR")
+    assert r2["tier"] == "high"  # benign text cannot lower the policy tier
+
+
+def test_gate_text_mismatch_goes_critical_via_api_field():
+    g = DevGate(clock=Clock())
+    r = g.propose("db.delete_rows", {"table": "t", **SAFE}, "bot", text="tidy the readme")
+    assert r["tier"] == "critical"
+    assert any("mismatch" in w for w in r["advisory"]["warnings"])
+
+
+def _tiers_rank(t):
+    import tiers
+    return tiers.rank(t)

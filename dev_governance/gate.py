@@ -16,6 +16,7 @@ from .policy import DevPolicy, load_policy
 from .adapters import Adapter, default_adapters
 from . import claims as _claims
 from . import advisory as _advisory
+from . import ambiguity as _ambiguity
 from . import destructive as _destructive
 from . import breaker as _breaker
 import tiers as _tiers
@@ -98,7 +99,8 @@ class DevGate:
 
     # 1. propose + 2. policy
     def propose(self, action: str, payload: dict, proposer: str, floor: Optional[str] = None,
-                owners: Optional[list] = None, require_owners: bool = False) -> dict:
+                owners: Optional[list] = None, require_owners: bool = False,
+                text: Optional[str] = None) -> dict:
         """owners: human approver usernames responsible for `proposer` (RT-03); they may not approve.
         require_owners: fail closed if a non-low request has no owner mapping."""
         action = (action or "").strip().lower()
@@ -124,7 +126,8 @@ class DevGate:
             a.approvals_required = max(a.approvals_required, guard.min_approvals,
                                        _tiers.approvals_required("critical", self.policy.required_overrides))
             a.reasons = a.reasons + [f"destructive: {w}" for w in guard.why]
-        adv = _advisory.build(action, stored, a.tier, a.known, guard, None)
+        amb = _ambiguity.analyze(text, action, stored) if text is not None else None
+        adv = _advisory.build(action, stored, a.tier, a.known, guard, amb)
         raised = _tiers.raise_only(a.tier, adv["threat_floor"])
         if raised != a.tier:
             a.reasons = a.reasons + [f"advisory raised tier {a.tier}->{raised}"]
@@ -149,7 +152,7 @@ class DevGate:
                "advisory": None,
                "status": "allowed" if a.approvals_required == 0 else "pending",
                "created_at": now, "expires_at": now + self.policy.ttl, "result": None}
-        if req["approvals_required"] > 0:
+        if req["approvals_required"] > 0 or (amb and amb["warnings"]):
             req["advisory"] = adv
         self.store.insert(req)
         audit.append("dev.proposed", proposer, request_id=rid, action=action, tier=a.tier,

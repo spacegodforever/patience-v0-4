@@ -4,7 +4,7 @@ Identity comes ONLY from injected dependencies (api.require_caller / api.require
 There is no identity header: the old X-Patience-User test header was removed.
 """
 from __future__ import annotations
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -14,6 +14,7 @@ from .gate import DevGate, GateError
 class ProposeIn(BaseModel):
     action: str = Field(..., min_length=1, max_length=100)
     payload: Dict[str, Any] = Field(default_factory=dict)
+    text: Optional[str] = Field(None, max_length=4000)
 
 
 class DecideIn(BaseModel):
@@ -51,7 +52,8 @@ def make_router(gate_factory: Callable[[], DevGate], caller_dep: Callable, appro
     def check(body: ProposeIn, caller: dict = Depends(caller_dep)):
         return _run(lambda: gate_factory().propose(body.action, body.payload, caller["id"],
                                                    owners=owners_of(caller),
-                                                   require_owners=caller.get("mode") != "dev"))
+                                                   require_owners=caller.get("mode") != "dev",
+                                                   text=body.text))
 
     @r.get("/requests/{rid}")
     def status(rid: str, caller: dict = Depends(caller_dep)):
