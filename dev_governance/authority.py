@@ -55,7 +55,17 @@ class CapabilityAuthority:
                 );
                 CREATE INDEX IF NOT EXISTS capability_events_grant
                     ON capability_events(grant_id, seq);
+                CREATE TRIGGER IF NOT EXISTS capability_events_no_update
+                    BEFORE UPDATE ON capability_events
+                    BEGIN SELECT RAISE(ABORT, 'capability_events is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS capability_events_no_delete
+                    BEFORE DELETE ON capability_events
+                    BEGIN SELECT RAISE(ABORT, 'capability_events is append-only'); END;
             """)
+
+        if path != ":memory:":
+            from .fsperm import secure_file
+            self.permissions_fixed = secure_file(path)  # grants are sensitive: 0600 like the gate DB
 
     def _conn(self):
         return self._memory if self._memory is not None else sqlite3.connect(self.path, timeout=30)

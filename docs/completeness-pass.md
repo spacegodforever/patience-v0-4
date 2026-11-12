@@ -52,3 +52,14 @@ Limits: the attestation proves the authenticating route vouched for the signer; 
 the same process with the claim secret can still mint one, so this is a trust-boundary check, not a
 second factor. Who may hold the `admin` role is a deployment decision. Isolation flags remain
 declared evidence, not enforced.
+
+## 3. Small hardening
+
+- A non-object payload (list, string, number) used to crash `DevGate.propose` with an
+  `AttributeError`; it is now refused with 422. A missing payload still means `{}`. (The HTTP routes
+  already required an object; direct callers such as the MCP server did not.)
+- The grant store (`capability_events`) now has SQLite triggers that abort any UPDATE or DELETE, so
+  the append-only property is enforced by the database, not only by convention. Anyone with write
+  access to the DB file can still drop the trigger or replace the file, and grant events are not
+  hash-chained; the audit log copy (`dev.authority.granted/revoked`) is the tamper-evident record.
+- The grant DB file is chmod 0600 on open, like the gate DB.

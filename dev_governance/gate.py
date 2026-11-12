@@ -112,6 +112,10 @@ class DevGate:
         if not proposer:
             raise GateError(400, "proposer is required")
         self._halt_checks(proposer, "propose")
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise GateError(422, "payload must be a JSON object")
         owners = sorted({str(o).strip() for o in (owners or []) if str(o).strip()})
         # A risk tier classifies impact; it does not grant capability. Only this new isolated-test
         # action uses an explicit grant, leaving legacy CI policy unchanged pending human review.
@@ -121,12 +125,12 @@ class DevGate:
                 raise GateError(403, "a human-granted isolated test capability is required")
             try:
                 self.authority.require(grant_id=authority_grant, actor=proposer, action=action,
-                                       payload=payload or {}, owners=owners,
+                                       payload=payload, owners=owners,
                                        request_expires_at=self.clock() + self.policy.ttl)
             except AuthorityError as e:
                 audit.append("dev.authority.refused", proposer, action=action, reason=e.message)
                 raise GateError(e.status, e.message)
-        stored = json.loads(canonical_json(payload or {}))  # 422 on non-JSON values (RT-06)
+        stored = json.loads(canonical_json(payload))  # 422 on non-JSON values (RT-06)
         if authority_grant is not None:
             if action != "test.run_isolated" or not isinstance(authority_grant, str) or not authority_grant.strip():
                 raise GateError(422, "authority_grant is accepted only for test.run_isolated")
