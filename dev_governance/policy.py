@@ -35,7 +35,7 @@ ACTION_FLOORS = {
     **{a: "critical" for a in ("db.drop", "db.truncate", "db.delete_rows", "repo.delete", "code.force_push",
                                "data.wipe", "infra.destroy", "secrets.rotate")},
     **{a: "high" for a in ("code.merge_pr", "deploy.rollback", "db.migrate", "infra.apply", "secrets.read",
-                           "spend.charge")},
+                           "spend.charge", "payments.pay_invoice")},
     "deploy.release": "medium",
 }
 # catastrophe limits: (key, bound, "max" = YAML may not exceed / "min" = YAML may not go below)

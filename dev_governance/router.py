@@ -116,6 +116,12 @@ def make_router(gate_factory: Callable[[], DevGate], caller_dep: Callable, appro
         code, out = _run(lambda: gate_factory().execute(rid, body.action, body.payload, caller["id"]))
         return JSONResponse(status_code=code, content=out)
 
+    @r.post("/requests/{rid}/permit")
+    def permit(rid: str, body: ProposeIn, caller: dict = Depends(caller_dep)):
+        """Execution Gateway v0: exchange an approved request for ONE signed, short-lived permit.
+        The agent presents the permit to the gateway; PATIENCE never executes the action itself."""
+        return _run(lambda: gate_factory().issue_permit(rid, body.action, body.payload, caller["id"]))
+
     @r.post("/admin/reconcile")
     def reconcile(body: ReconcileIn = ReconcileIn(), who: dict = Depends(approver_dep)):
         """Flag requests stuck in 'executing' as 'needs_review'. Never retries anything."""

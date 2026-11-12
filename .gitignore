@@ -29,3 +29,7 @@ patience_dev_gate.db
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Execution gateway v0: signing keys are secrets
+*.permit_key
+*.key

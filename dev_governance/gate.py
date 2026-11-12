@@ -22,6 +22,8 @@ from . import breaker as _breaker
 import tiers as _tiers
 from .store import MemoryStore, default_store
 from .authority import AuthorityError
+from execution_gateway import PERMIT_ACTIONS as _PERMIT_ACTIONS, validate_invoice_payload as _validate_invoice
+from execution_gateway.issuer import PermitError as _PermitError, issuer_for_store as _issuer_for_store
 
 
 class GateError(Exception):
@@ -62,7 +64,8 @@ _MAX_CAS_RETRIES = 50
 
 class DevGate:
     def __init__(self, policy: Optional[DevPolicy] = None, adapters: Optional[list[Adapter]] = None,
-                 clock: Callable[[], float] = time.time, store=None, breaker=None, authority=None):
+                 clock: Callable[[], float] = time.time, store=None, breaker=None, authority=None,
+                 permit_issuer=None):
         self.policy = policy or load_policy()
         self.adapters: dict[str, Adapter] = {}
         for a in (adapters if adapters is not None else default_adapters()):
@@ -70,6 +73,7 @@ class DevGate:
                 self.adapters[act] = a
         self.clock = clock
         self.authority = authority
+        self._permit_issuer = permit_issuer
         self.store = store if store is not None else MemoryStore()
         spath = getattr(self.store, "path", None)
         if spath and spath != ":memory:":
@@ -135,6 +139,11 @@ class DevGate:
             if action != "test.run_isolated" or not isinstance(authority_grant, str) or not authority_grant.strip():
                 raise GateError(422, "authority_grant is accepted only for test.run_isolated")
             stored["authority_grant"] = authority_grant.strip()
+        if action in _PERMIT_ACTIONS:  # permit-gated actions: strict payload shape, checked at propose time
+            try:
+                _validate_invoice(stored)
+            except ValueError as e:
+                raise GateError(422, str(e))
         ad = self.adapters.get(action)
         if ad is not None and hasattr(ad, "validate"):
             try:
@@ -281,6 +290,8 @@ class DevGate:
             audit.append("dev.payload_mismatch", caller, request_id=rid, expected=req["payload_hash"], got=h)
             raise GateError(409, "action/payload differ from the approved request; a new approval is required")
         self._halt_checks(req["proposer"], "execute")
+        if req["action"] in _PERMIT_ACTIONS:
+            raise GateError(409, f"{req['action']} is executed only by the execution gateway; request a permit")
         if req["action"] == "test.run_isolated":
             if self.authority is None:
                 raise GateError(403, "a human-granted isolated test capability is required")
@@ -324,6 +335,71 @@ class DevGate:
             return 202, {"status": "pending_approval", "request_id": rid,
                          "approvals": len(req["approvals"]), "required": req["approvals_required"]}
         return self._run_claimed(req, h, caller)
+
+    # 4b. permit issuance (Execution Gateway v0): a signed single-action permit instead of execution
+    def permit_issuer(self):
+        if self._permit_issuer is None:
+            try:
+                self._permit_issuer = _issuer_for_store(getattr(self.store, "path", None), self.clock)
+            except _PermitError as e:
+                audit.append("dev.permit.refused", None, reason="issuer_unavailable")
+                raise GateError(503, str(e))
+        return self._permit_issuer
+
+    def issue_permit(self, rid: str, action: str, payload: dict, caller: str,
+                     ttl_seconds: Optional[int] = None) -> dict:
+        """Mint ONE permit for an approved request. Same preconditions as execute(): payload hash must
+        match the approval, caller must be the proposer (or owner), kill switch/breaker off, approval
+        not expired and fully granted. Issuing consumes the approval (status 'permit_issued', terminal)
+        so a request can never yield a second permit. The permit is bound to the proposer's id."""
+        req = self._get(rid)
+        try:
+            h = payload_hash(action, payload)
+        except GateError:
+            h = "invalid"
+        if h != req["payload_hash"]:
+            audit.append("dev.payload_mismatch", caller, request_id=rid, expected=req["payload_hash"], got=h)
+            raise GateError(409, "action/payload differ from the approved request; a new approval is required")
+        if req["action"] not in _PERMIT_ACTIONS:
+            raise GateError(422, f"{req['action']!r} is not a permit-gated action")
+        self._halt_checks(req["proposer"], "permit")
+        allowed = {req["proposer"]}
+        if self.policy.data.get("execute_by", "proposer_or_owner") == "proposer_or_owner":
+            allowed |= set(req.get("owners") or [])
+        if caller not in allowed:
+            audit.append("dev.permit.forbidden", caller, request_id=rid, proposer=req["proposer"])
+            raise GateError(403, "only the proposer (or its owner) may request a permit")
+        if self._expire_if_due(rid)["status"] == "expired":
+            raise GateError(409, "approval window expired; submit a new proposal")
+        out = {}
+
+        def claim(req):
+            s = req["status"]
+            if s == "denied":
+                raise GateError(403, "request was denied")
+            if s in ("executed", "executing", "permit_issued"):
+                raise GateError(409, "this approval was already used")
+            ok = (s == "allowed" and req["approvals_required"] == 0) or \
+                 (s == "approved" and len(set(req["approvals"])) >= req["approvals_required"])
+            if not ok:
+                raise GateError(409, f"request is not approved (status {s!r})")
+            try:
+                out["p"] = self.permit_issuer().issue(agent=req["proposer"], action=req["action"],
+                                                      payload_hash=req["payload_hash"], request_id=rid,
+                                                      ttl_seconds=ttl_seconds, not_after=req["expires_at"])
+            except _PermitError as e:
+                audit.append("dev.permit.refused", caller, request_id=rid, reason=str(e)[:200])
+                raise GateError(503, str(e))
+            req["claimed_from"], req["status"] = s, "permit_issued"
+            req["permit"] = {k: out["p"][k] for k in ("jti", "kid", "iat", "exp")} | {"issued_to": caller}
+            return True, None
+        req, _, _ = self._update(rid, claim)
+        p = out["p"]
+        audit.append("dev.permit.issued", caller, request_id=rid, agent=req["proposer"], action=req["action"],
+                     payload_hash=req["payload_hash"], permit_id=p["jti"], key_id=p["kid"],
+                     issued_at=p["iat"], expires_at=p["exp"])
+        return {"request_id": rid, "action": req["action"], "agent": req["proposer"], "permit": p["permit"],
+                "key_id": p["kid"], "issued_at": p["iat"], "expires_at": p["exp"]}
 
     def _run_claimed(self, req: dict, h: str, caller: str) -> tuple[int, dict]:
         rid = req["request_id"]

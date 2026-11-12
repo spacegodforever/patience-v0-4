@@ -19,7 +19,7 @@ from typing import Optional
 from . import fsperm as _fsperm
 
 SCHEMA_VERSION = 2
-TERMINAL = ("executed", "denied", "expired")
+TERMINAL = ("executed", "denied", "expired", "permit_issued")
 MIGRATIONS = [
     # 0 -> 1
     """CREATE TABLE IF NOT EXISTS dev_requests (
@@ -131,7 +131,7 @@ class SqliteStore:
         with self._conn() as c:
             cur = c.execute(
                 "UPDATE dev_requests SET status=?, body=?, version=version+1 WHERE request_id=? AND version=? "
-                "AND payload_hash=? AND status NOT IN ('executed','denied','expired')",
+                "AND payload_hash=? AND status NOT IN ('executed','denied','expired','permit_issued')",
                 (req["status"], _body(req), req["request_id"], int(req.get("_v", -1)), req["payload_hash"]))
             ok = cur.rowcount == 1
         if ok:

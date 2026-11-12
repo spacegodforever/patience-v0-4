@@ -48,6 +48,11 @@ actions:
     tier: high
     category: spend
     over_amount: {field: amount_usd, threshold: 500, tier: critical}
+  # Execution Gateway v0 (simulated): approval yields a signed single-use permit, not execution.
+  payments.pay_invoice:
+    tier: high
+    category: spend
+    over_amount: {field: amount_usd, threshold: 500, tier: critical}
   db.drop:             {tier: critical, category: db_destructive}
   db.truncate:         {tier: critical, category: db_destructive}
   db.delete_rows:      {tier: critical, category: db_destructive}
