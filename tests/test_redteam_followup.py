@@ -11,7 +11,7 @@ from dev_governance.gate import payload_hash
 from dev_governance.store import SqliteStore
 from dev_governance.breaker import Breaker
 
-PR = {"repo": "spacegodforever/patience-v0-4", "head": "feat/x", "base": "v0.6-security-fixes"}
+PR = {"repo": "spacegodforever/patience-v0-4", "head": "feat/x", "base": "v0.6-security-fixes", "title": "t"}
 
 
 class Clock:

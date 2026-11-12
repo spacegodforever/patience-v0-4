@@ -641,6 +641,7 @@ from dev_governance import DevGate as _DevGate
 from dev_governance.router import make_router as _make_dev_router
 from dev_governance.store import default_store as _dev_store
 from dev_governance.authority import default_authority as _dev_authority
+from dev_governance.wiring import api_adapters as _dev_api_adapters
 
 
 def dev_gate() -> _DevGate:
@@ -648,7 +649,7 @@ def dev_gate() -> _DevGate:
     from dev_governance.policy import load_policy as _load_dev_policy
     pol = _load_dev_policy()
     return _DevGate(policy=pol, store=_dev_store(), breaker=_dev_breaker(pol.data.get("breaker")),
-                    authority=_dev_authority())
+                    authority=_dev_authority(), adapters=_dev_api_adapters())
 
 
 app.include_router(_make_dev_router(lambda: dev_gate(), require_caller, require_approver,

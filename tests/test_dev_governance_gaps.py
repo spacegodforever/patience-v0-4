@@ -22,7 +22,7 @@ class Clock:
     def __call__(self): return self.t
 
 
-PR = {"repo": "spacegodforever/patience-v0-4", "head": "feat/x", "base": "v0.6-security-fixes"}
+PR = {"repo": "spacegodforever/patience-v0-4", "head": "feat/x", "base": "v0.6-security-fixes", "title": "t"}
 PROD = {"service": "api", "environment": "prod", "version": "1.2.3",
     # destructive-action guard (feat/catastrophe-guard) requires these for prod changes
     "rollback_plan": "redeploy previous version 1.2.2 via deploy.rollback", "backup": {"snapshot_id": "snap-1"},
@@ -197,8 +197,10 @@ def test_full_flow_via_api(secured):
     assert c.post(f"/v1/dev/requests/{rid}/approve", headers=_basic("matthew", "matthew-password-1")).status_code == 200
     assert ex({**PR, "base": "main"}).status_code == 409
     r = ex(PR)
-    assert r.status_code == 200 and r.json()["result"]["simulated"] is True
-    assert ex(PR).status_code == 409
+    # default API wiring: code.open_pr goes to GitHubAdapter in dry-run mode (nothing sent, so the
+    # approval is not consumed; single-use of a real send is covered in test_github_adapter.py)
+    assert r.status_code == 200 and r.json()["result"]["dry_run"] is True
+    assert "PATIENCE_GITHUB_LIVE is off" in r.json()["result"]["not_sent_because"]
     assert audit.verify()["ok"]
 
 

@@ -349,7 +349,8 @@ class DevGate:
         if not self.store.cas(req):  # we hold the claim; nobody else can legally write
             audit.append("dev.execute.finalize_conflict", caller, request_id=rid)
         audit.append("dev.executed" if err is None else "dev.execute.failed", caller, request_id=rid,
-                     simulated=getattr(ad, "simulated", True), error=err)
+                     simulated=getattr(ad, "simulated", True), error=err,
+                     dry_run=bool(isinstance(result, dict) and result.get("dry_run")))
         return 200, {"status": "executed" if err is None else "failed", "request_id": rid, "result": result, "error": err}
 
     # 6. crash recovery: 'executing' left behind by a dead process becomes 'needs_review'

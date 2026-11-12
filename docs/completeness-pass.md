@@ -63,3 +63,7 @@ declared evidence, not enforced.
   access to the DB file can still drop the trigger or replace the file, and grant events are not
   hash-chained; the audit log copy (`dev.authority.granted/revoked`) is the tamper-evident record.
 - The grant DB file is chmod 0600 on open, like the gate DB.
+
+## 4. GitHub dry-run wiring
+
+The API's dev gate now routes GitHub reads and `code.open_pr` to `GitHubAdapter`, dry run by default, with refusal tests through the API. See `docs/github-dryrun-wiring.md` (wiring, tests, limitations). Not a live GitHub integration; no live write proven.
