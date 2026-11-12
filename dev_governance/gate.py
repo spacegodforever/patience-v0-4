@@ -312,6 +312,7 @@ class DevGate:
             if self.adapters.get(req["action"]) is None:
                 raise GateError(501, f"no adapter configured for {req['action']!r}")
             req["claimed_from"] = s
+            req["claimed_at"] = self.clock()
             req["status"] = "executing"
             return True, "claimed"
         req, _, what = self._update(rid, claim)
@@ -346,6 +347,79 @@ class DevGate:
         audit.append("dev.executed" if err is None else "dev.execute.failed", caller, request_id=rid,
                      simulated=getattr(ad, "simulated", True), error=err)
         return 200, {"status": "executed" if err is None else "failed", "request_id": rid, "result": result, "error": err}
+
+    # 6. crash recovery: 'executing' left behind by a dead process becomes 'needs_review'
+    def flag_stuck_executions(self, actor: str, min_age_seconds: float = 300,
+                              request_ids: Optional[list] = None) -> list:
+        """Move requests stuck in 'executing' for at least min_age_seconds to 'needs_review'.
+
+        Never retries: the side effect may or may not have happened. Only a named human, via
+        resolve_review(), can close the request. Each flagged request is audited. By default every
+        request the store lists as 'executing' is inspected; pass request_ids to limit the sweep.
+        Use a min age above the slowest adapter timeout so a live execution is not flagged.
+        """
+        if not actor:
+            raise GateError(403, "a human approver is required to flag stuck executions")
+        try:
+            min_age = float(min_age_seconds)
+        except (TypeError, ValueError):
+            raise GateError(422, "min_age_seconds must be a number")
+        if min_age < 0 or min_age != min_age:
+            raise GateError(422, "min_age_seconds must be >= 0")
+        ids = request_ids
+        if ids is None:
+            lister = getattr(self.store, "list_by_status", None)
+            ids = lister("executing") if lister else []
+        flagged = []
+        for rid in ids:
+            seen = {}
+
+            def m(req):
+                if req["status"] != "executing":
+                    return False, None
+                at = req.get("claimed_at")
+                age = float("inf") if not isinstance(at, (int, float)) else self.clock() - at
+                if age < min_age:
+                    return False, None
+                req["status"] = "needs_review"
+                req["flagged_at"] = self.clock()
+                req["flagged_by"] = actor
+                seen["from"] = at
+                return True, None
+            try:
+                req, changed, _ = self._update(rid, m)
+            except GateError:
+                continue  # unknown id or contention: leave it for the next sweep
+            if changed:
+                audit.append("dev.execute.needs_review", actor, request_id=rid, claimed_at=seen["from"],
+                             payload_hash=req["payload_hash"])
+                flagged.append(rid)
+        return flagged
+
+    def resolve_review(self, rid: str, approver: str, outcome: str, note: str = "") -> dict:
+        """A named human records what really happened to a 'needs_review' request after checking the
+        target system. The request ends 'executed' (terminal) either way; it can never run again.
+        The proposer and the proposer's owners cannot resolve it (same separation as approval)."""
+        if outcome not in ("executed", "failed"):
+            raise GateError(422, "outcome must be 'executed' or 'failed'")
+        if not isinstance(note, str) or not note.strip():
+            raise GateError(422, "a note describing what was checked is required")
+
+        def m(req):
+            if req["status"] != "needs_review":
+                raise GateError(409, f"request is {req['status']}, not needs_review")
+            if not approver or approver == req["proposer"] or approver in (req.get("owners") or []):
+                audit.append("dev.self_resolution_rejected", approver, request_id=rid)
+                raise GateError(403, "the proposer or its owner cannot resolve its own interrupted request")
+            req["status"] = "executed"
+            req["resolution"] = {"outcome": outcome, "resolved_by": approver, "resolved_at": self.clock(),
+                                 "note": note.strip()[:1000]}
+            req["error"] = None if outcome == "executed" else "execution interrupted; human recorded that it failed"
+            return True, None
+        req, _, _ = self._update(rid, m)
+        audit.append("dev.execute.resolved", approver, request_id=rid, outcome=outcome,
+                     note=note.strip()[:1000], payload_hash=req["payload_hash"])
+        return self._public(req)
 
     def status(self, rid: str) -> dict:
         return self._public(self._expire_if_due(rid))

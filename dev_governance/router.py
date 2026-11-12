@@ -22,6 +22,15 @@ class DecideIn(BaseModel):
     reason: str = Field("", max_length=1000)
 
 
+class ResolveIn(BaseModel):
+    outcome: str = Field(..., pattern="^(executed|failed)$")
+    note: str = Field(..., min_length=1, max_length=1000)
+
+
+class ReconcileIn(BaseModel):
+    min_age_seconds: float = Field(300, ge=0, le=86400 * 30)
+
+
 def _run(fn):
     try:
         return fn()
@@ -86,6 +95,16 @@ def make_router(gate_factory: Callable[[], DevGate], caller_dep: Callable, appro
     def execute(rid: str, body: ProposeIn, caller: dict = Depends(caller_dep)):
         code, out = _run(lambda: gate_factory().execute(rid, body.action, body.payload, caller["id"]))
         return JSONResponse(status_code=code, content=out)
+
+    @r.post("/admin/reconcile")
+    def reconcile(body: ReconcileIn = ReconcileIn(), who: dict = Depends(approver_dep)):
+        """Flag requests stuck in 'executing' as 'needs_review'. Never retries anything."""
+        flagged = _run(lambda: gate_factory().flag_stuck_executions(who["user"], body.min_age_seconds))
+        return {"flagged": flagged}
+
+    @r.post("/requests/{rid}/resolve")
+    def resolve(rid: str, body: ResolveIn, who: dict = Depends(approver_dep)):
+        return _run(lambda: gate_factory().resolve_review(rid, who["user"], body.outcome, body.note))
 
     @r.get("/breaker/{agent}")
     def breaker_status(agent: str, caller: dict = Depends(caller_dep)):

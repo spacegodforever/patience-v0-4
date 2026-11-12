@@ -73,6 +73,10 @@ class MemoryStore:
             req["_v"] = cur[0] + 1
             return True
 
+    def list_by_status(self, status: str) -> list:
+        with self._lock:
+            return sorted(rid for rid, (_, b) in self._d.items() if json.loads(b)["status"] == status)
+
     def schema_version(self) -> int:
         return SCHEMA_VERSION
 
@@ -133,6 +137,11 @@ class SqliteStore:
         if ok:
             req["_v"] = int(req["_v"]) + 1
         return ok
+
+    def list_by_status(self, status: str) -> list:
+        with self._conn() as c:
+            return [r[0] for r in c.execute("SELECT request_id FROM dev_requests WHERE status=? "
+                                            "ORDER BY request_id", (status,))]
 
     def schema_version(self) -> int:
         with self._conn() as c:
