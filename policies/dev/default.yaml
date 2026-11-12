@@ -4,7 +4,19 @@
 version: 1
 approval_ttl_seconds: 3600
 unknown_action_tier: high
+# Who may execute an approved request: proposer | proposer_or_owner (RT-07)
+execute_by: proposer_or_owner
 approvers_required: {low: 0, medium: 1, high: 1, critical: 2}
+# Destructive-action guard (dev_governance/destructive.py): irreversible actions need rollback_plan,
+# backup evidence and blast_radius; tier critical (2 approvers); over max -> 3 approvers; over
+# max x hard_factor -> refused.
+catastrophe: {max_rows: 10000, max_resources: 10, hard_factor: 10, min_rollback_chars: 20}
+# Circuit breaker (dev_governance/breaker.py): per-agent rolling window. Over the limit the agent is
+# frozen and its requests held until a human approver resets it. PATIENCE_DEV_KILL=1 halts everything.
+# Defaults chosen by simulation (tools/sim_breaker.py): 0 false trips on simulated benign bursts (up to
+# 7 high actions in ~5 min), all simulated runaways caught within 20 events. 5/300s tripped ~28% of
+# simulated benign sessions.
+breaker: {window_seconds: 600, max_high_proposals: 8, max_anomalies: 3}  # tuned: tools/sim_breaker.py
 actions:
   code.open_pr:        {tier: medium, category: code_change}
   code.merge_pr:       {tier: high,   category: code_change}
@@ -34,3 +46,9 @@ actions:
     tier: high
     category: spend
     over_amount: {field: amount_usd, threshold: 500, tier: critical}
+  db.drop:             {tier: critical, category: db_destructive}
+  db.truncate:         {tier: critical, category: db_destructive}
+  db.delete_rows:      {tier: critical, category: db_destructive}
+  repo.delete:         {tier: critical, category: code_destructive}
+  data.wipe:           {tier: critical, category: data_destructive}
+  infra.destroy:       {tier: critical, category: infra}

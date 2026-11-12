@@ -102,8 +102,14 @@ def _basic(authorization: Optional[str]):
         return None
 
 
+LEGACY_TOKEN_MIN_LEN = 32
+
+
 def legacy_token_enabled() -> bool:
-    return os.environ.get("PATIENCE_LEGACY_APPROVER_TOKEN") == "1" and bool(os.environ.get("PATIENCE_APPROVER_TOKEN"))
+    """RT-13: DEPRECATED shared approver token. Fail closed unless explicitly enabled AND the token is
+    at least 32 chars. Never accepted on /v1/dev/* routes (see dev_governance.router)."""
+    tok = os.environ.get("PATIENCE_APPROVER_TOKEN") or ""
+    return os.environ.get("PATIENCE_LEGACY_APPROVER_TOKEN") == "1" and len(tok) >= LEGACY_TOKEN_MIN_LEN
 
 
 # Per-client-IP brute-force limit (in-process; complements the per-user lockout in approvers.py).
@@ -637,7 +643,10 @@ from dev_governance.store import default_store as _dev_store
 
 
 def dev_gate() -> _DevGate:
-    return _DevGate(store=_dev_store())
+    from dev_governance.breaker import default_breaker as _dev_breaker
+    from dev_governance.policy import load_policy as _load_dev_policy
+    pol = _load_dev_policy()
+    return _DevGate(policy=pol, store=_dev_store(), breaker=_dev_breaker(pol.data.get("breaker")))
 
 
 app.include_router(_make_dev_router(lambda: dev_gate(), require_caller, require_approver))

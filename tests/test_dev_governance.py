@@ -30,7 +30,10 @@ def gate(clock): return DevGate(clock=clock)
 
 
 PR = {"repo": "spacegodforever/patience-v0-4", "head": "feat/x", "base": "v0.6-security-fixes", "title": "t"}
-DEPLOY_PROD = {"service": "api", "environment": "prod", "version": "1.2.3"}
+DEPLOY_PROD = {"service": "api", "environment": "prod", "version": "1.2.3",
+    # destructive-action guard (feat/catastrophe-guard) requires these for prod changes
+    "rollback_plan": "redeploy previous version 1.2.2 via deploy.rollback", "backup": {"snapshot_id": "snap-1"},
+    "blast_radius": {"rows": 0, "resources": 1}}
 DEPLOY_STG = {"service": "api", "environment": "staging", "version": "1.2.3"}
 
 

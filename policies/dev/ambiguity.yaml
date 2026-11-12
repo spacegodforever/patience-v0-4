@@ -1,0 +1,59 @@
+# Language ambiguity rules (deterministic). Text is normalized first (NFKC, zero-width/format
+# chars stripped, case-folded, homoglyphs + leetspeak folded, spaced-out letters re-joined), then
+# matched per token with a small typo tolerance. The analyzer may only RAISE the tier or add
+# warnings; it never lowers anything.
+version: ambiguity-v2
+ambiguous_verbs:
+  # verb -> interpretations ranked least -> most destructive, each with the actions it maps to
+  clean up:
+    - {meaning: "archive or tidy (no deletion)", actions: [code.open_pr, ci.run]}
+    - {meaning: "delete selected rows/files", actions: [db.delete_rows]}
+    - {meaning: "wipe the whole table/dataset", actions: [db.truncate, db.drop, data.wipe]}
+  reset:
+    - {meaning: "restart / reset state flag", actions: [ci.run, deploy.release]}
+    - {meaning: "roll back to prior version", actions: [deploy.rollback, db.migrate]}
+    - {meaning: "erase and recreate", actions: [db.truncate, db.drop, data.wipe, infra.destroy, code.force_push]}
+  remove:
+    - {meaning: "unlink / disable", actions: [code.open_pr]}
+    - {meaning: "delete specific records", actions: [db.delete_rows]}
+    - {meaning: "delete the whole resource", actions: [db.drop, repo.delete, infra.destroy, data.wipe]}
+  sync:
+    - {meaning: "pull/compare only", actions: [ci.run]}
+    - {meaning: "merge changes", actions: [code.merge_pr, infra.apply, db.migrate]}
+    - {meaning: "overwrite target to match source", actions: [code.force_push, db.truncate, data.wipe]}
+  fix:
+    - {meaning: "propose a patch for review", actions: [code.open_pr]}
+    - {meaning: "ship a change", actions: [code.merge_pr, deploy.release, db.migrate]}
+    - {meaning: "rewrite history / data in place", actions: [code.force_push, db.delete_rows, db.truncate]}
+# synonyms are matched as if they were the canonical verb
+verb_synonyms:
+  clean up: [tidy up, tidy, clear out, declutter, prune]
+  reset: [reinitialize, reinit, start fresh, start over, factory reset]
+  remove: [get rid of, eliminate, take out]
+  sync: [mirror, reconcile]
+  fix: [repair, sort out]
+# words that honestly announce a destructive action (checked in the request TEXT only)
+destructive_words: [drop, delete, truncate, wipe, destroy, erase, purge, nuke, obliterate, scrub, shred,
+                    zap, annihilate, demolish, force push, rm, remove permanently, get rid of, clear out]
+negations: [not, "don't", dont, do not, never, "no", without, "won't", wont, nothing, avoid]
+negation_window: 3
+unbounded_scope: [all, every, everything, entire, whole, prod, production, "*", globally, across the board,
+                  every single, all of, wholesale, entire org]
+scope_limits: [table, repo, date, where, id, since, before, limit, only, branch]
+pressure: [urgent, immediately, asap, right now, right away, skip review, skip the review, no review,
+           without review, review needed, just do it, "don't ask", dont ask, bypass, override, hurry, emergency,
+           before anyone notices, no time, ceo wants, skip approval, bypass approval, no questions]
+# free-text payload fields scanned together with the text (split-across-fields evasion)
+free_text_fields: [note, notes, description, reason, comment, message, title, body, summary, intent,
+                   justification, context]
+fuzzy: {min_len_1_edit: 5, min_len_2_edits: 9}
+# Score -> tier. Each signal adds its weight; the tier is the highest threshold reached.
+# Tuned on the corpus dev split only (tools/eval_ambiguity.py); holdout reported, not tuned on.
+weights: {ambiguous_verb: 0.75, unbounded_scope: 2, pressure: 2, negated_destructive: 4, mismatch: 4,
+          object_mismatch: 4}
+thresholds: {medium: 0.75, high: 2, critical: 4}
+object_stopwords: [table, tables, the, a, an, in, of, on, for, with, from, whole, entire, every, all, db,
+                   database, data, unused, scratch, this, that, it, only, read, old]
+whole_object_actions: [db.truncate, db.drop, data.wipe, repo.delete, infra.destroy]
+subset_qualifiers: [old, stale, expired, some, a few, test, temporary, duplicate, orphaned, inactive]
+row_nouns: [records, rows, entries, users, sessions, logs, accounts, orders, events]

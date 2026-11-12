@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from test_gateway import env, H, ex  # noqa: F401  (fixture reuse)
 
-APPR = {"X-Approver-Token": "appr"}
+APPR = {"X-Approver-Token": "appr-legacy-test-token-0123456789abcdef"}
 
 
 def _long_args(tail):

@@ -97,12 +97,13 @@ def test_brute_force_throttled(c):
 
 def test_legacy_token_needs_explicit_flag(c, monkeypatch):
     client, key = c
-    monkeypatch.setenv("PATIENCE_APPROVER_TOKEN", "shared")
+    shared = "shared-legacy-token-0123456789abcdef"  # RT-13: >= 32 chars required
+    monkeypatch.setenv("PATIENCE_APPROVER_TOKEN", shared)
     monkeypatch.delenv("PATIENCE_LEGACY_APPROVER_TOKEN")
     rid = risky(client, key)
-    assert client.post(f"/v1/requests/{rid}/approve", headers={"X-Approver-Token": "shared"}).status_code == 403
+    assert client.post(f"/v1/requests/{rid}/approve", headers={"X-Approver-Token": shared}).status_code == 403
     monkeypatch.setenv("PATIENCE_LEGACY_APPROVER_TOKEN", "1")
-    r = client.post(f"/v1/requests/{rid}/approve", headers={"X-Approver-Token": "shared"})
+    r = client.post(f"/v1/requests/{rid}/approve", headers={"X-Approver-Token": shared})
     assert r.status_code == 200 and r.json()["approver"] == "legacy-token"
 
 

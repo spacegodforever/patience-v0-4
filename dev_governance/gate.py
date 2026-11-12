@@ -14,6 +14,12 @@ from typing import Any, Callable, Optional
 import audit
 from .policy import DevPolicy, load_policy
 from .adapters import Adapter, default_adapters
+from . import claims as _claims
+from . import advisory as _advisory
+from . import ambiguity as _ambiguity
+from . import destructive as _destructive
+from . import breaker as _breaker
+import tiers as _tiers
 from .store import MemoryStore, default_store
 
 
@@ -55,7 +61,7 @@ _MAX_CAS_RETRIES = 50
 
 class DevGate:
     def __init__(self, policy: Optional[DevPolicy] = None, adapters: Optional[list[Adapter]] = None,
-                 clock: Callable[[], float] = time.time, store=None):
+                 clock: Callable[[], float] = time.time, store=None, breaker=None):
         self.policy = policy or load_policy()
         self.adapters: dict[str, Adapter] = {}
         for a in (adapters if adapters is not None else default_adapters()):
@@ -63,15 +69,47 @@ class DevGate:
                 self.adapters[act] = a
         self.clock = clock
         self.store = store if store is not None else MemoryStore()
+        spath = getattr(self.store, "path", None)
+        if spath and spath != ":memory:":
+            _claims.use_secret_file(spath + ".key")
+        self.breaker = breaker if breaker is not None else _breaker.Breaker(None, self.policy.data.get("breaker"), clock)
+
+    def _halt_checks(self, agent: str, what: str) -> None:
+        if _breaker.kill_switch_on():
+            audit.append("dev.kill_switch.blocked", agent, what=what)
+            raise GateError(503, "PATIENCE_DEV_KILL is on: all dev actions are halted")
+        if agent and self.breaker.frozen(agent):
+            audit.append("dev.breaker.held", agent, what=what)
+            raise GateError(423, f"agent {agent!r} is frozen by the circuit breaker; a human approver must reset it")
+
+    def _trip_check(self, agent: str, kind: str) -> None:
+        reason = self.breaker.record(agent, kind)
+        if reason:
+            audit.append("dev.breaker.tripped", agent, reason=reason)
+
+    def reset_breaker(self, agent: str, approver: str, reason: str = "") -> dict:
+        if not approver:
+            raise GateError(403, "a human approver is required to reset the breaker")
+        prev = self.breaker.reset(agent, approver)
+        audit.append("dev.breaker.reset", approver, agent=agent, was_frozen=prev.get("frozen"),
+                     prior_reason=prev.get("reason"), reason=reason)
+        return {"agent": agent, "frozen": False, "was_frozen": bool(prev.get("frozen"))}
+
+    def breaker_status(self, agent: str) -> dict:
+        st = self.breaker.state(agent)
+        return {"agent": agent, "frozen": st["frozen"], "reason": st["reason"], "tripped_at": st["tripped_at"],
+                "kill_switch": _breaker.kill_switch_on()}
 
     # 1. propose + 2. policy
     def propose(self, action: str, payload: dict, proposer: str, floor: Optional[str] = None,
-                owners: Optional[list] = None, require_owners: bool = False) -> dict:
+                owners: Optional[list] = None, require_owners: bool = False,
+                text: Optional[str] = None) -> dict:
         """owners: human approver usernames responsible for `proposer` (RT-03); they may not approve.
         require_owners: fail closed if a non-low request has no owner mapping."""
         action = (action or "").strip().lower()
         if not proposer:
             raise GateError(400, "proposer is required")
+        self._halt_checks(proposer, "propose")
         stored = json.loads(canonical_json(payload or {}))  # 422 on non-JSON values (RT-06)
         ad = self.adapters.get(action)
         if ad is not None and hasattr(ad, "validate"):
@@ -80,22 +118,53 @@ class DevGate:
             except ValueError as e:
                 raise GateError(422, str(e))
         a = self.policy.assess(action, stored, floor)
+        guard = _destructive.check(action, stored, self.policy.data.get("catastrophe"))
+        if guard.destructive:
+            if guard.refuse:
+                audit.append("dev.destructive.refused", proposer, action=action, reason=guard.refuse,
+                             why=guard.why)
+                self._on_refused(proposer)
+                raise GateError(422, f"refused (fail closed): {guard.refuse}")
+            a.tier = "critical"
+            a.approvals_required = max(a.approvals_required, guard.min_approvals,
+                                       _tiers.approvals_required("critical", self.policy.required_overrides))
+            a.reasons = a.reasons + [f"destructive: {w}" for w in guard.why]
+        amb = _ambiguity.analyze(text, action, stored) if text is not None else None
+        adv = _advisory.build(action, stored, a.tier, a.known, guard, amb)
+        raised = _tiers.raise_only(a.tier, adv["threat_floor"])
+        if raised != a.tier:
+            a.reasons = a.reasons + [f"advisory raised tier {a.tier}->{raised}"]
+            a.tier = raised
+            a.approvals_required = max(a.approvals_required,
+                                       _tiers.approvals_required(raised, self.policy.required_overrides))
         owners = sorted({str(o).strip() for o in (owners or []) if str(o).strip()})
         if require_owners and not owners and a.approvals_required > 0:
             audit.append("dev.propose.rejected", proposer, action=action, reason="no_owner_mapping")
             raise GateError(403, "proposer has no owner mapping; non-low dev actions are refused (set owners)")
+        if a.tier in ("high", "critical"):
+            self._trip_check(proposer, "high")
+            if self.breaker.frozen(proposer):
+                raise GateError(423, f"agent {proposer!r} tripped the circuit breaker; a human approver must reset it")
         rid = "dev_" + secrets.token_hex(8)
         now = self.clock()
         req = {"request_id": rid, "action": action, "payload": stored,
                "payload_hash": payload_hash(action, stored), "proposer": proposer, "owners": owners,
                "tier": a.tier, "category": a.category, "known": a.known,
                "approvals_required": a.approvals_required, "reasons": a.reasons, "approvals": [],
+               "destructive": guard.destructive, "blast_radius": guard.blast or None,
+               "advisory": None,
                "status": "allowed" if a.approvals_required == 0 else "pending",
                "created_at": now, "expires_at": now + self.policy.ttl, "result": None}
+        req["expiry_sig"] = self._expiry_sig(req)  # RT-08: expiry is bound to the request
+        if req["approvals_required"] > 0 or (amb and amb["warnings"]):
+            req["advisory"] = adv
         self.store.insert(req)
         audit.append("dev.proposed", proposer, request_id=rid, action=action, tier=a.tier,
                      known=a.known, payload_hash=req["payload_hash"], reasons=a.reasons, owners=owners)
         return self._public(req)
+
+    def _on_refused(self, proposer: str) -> None:
+        self._trip_check(proposer, "anomaly")  # refusals count as anomalies
 
     def _get(self, rid: str) -> dict:
         req = self.store.get(rid)
@@ -113,19 +182,38 @@ class DevGate:
                 return req, changed, value
         raise GateError(409, "request is under heavy contention; retry")
 
+    @staticmethod
+    def _expiry_sig(req: dict) -> str:
+        return _claims.sign_fields("expiry-v1", req["request_id"], req["payload_hash"],
+                                   float(req["created_at"]), float(req["expires_at"]))
+
     def _expire_if_due(self, rid: str) -> dict:
+        """RT-08: an expiry that does not match its signature (e.g. edited in the DB to extend the
+        window) fails closed: the request is expired. The window may also never exceed policy TTL."""
+        why = {}
+
         def m(req):
-            if req["status"] in ("pending", "approved") and self.clock() > req["expires_at"]:
+            if req["status"] not in ("pending", "approved"):
+                return False, None
+            tampered = not _claims.check_fields(req.get("expiry_sig"), "expiry-v1", req["request_id"],
+                                                req["payload_hash"], float(req["created_at"]),
+                                                float(req["expires_at"])) \
+                or float(req["expires_at"]) - float(req["created_at"]) > self.policy.ttl
+            if tampered or self.clock() > req["expires_at"]:
                 req["status"] = "expired"
+                why["tampered"] = tampered
                 return True, None
             return False, None
         req, changed, _ = self._update(rid, m)
         if changed:
+            if why.get("tampered"):
+                audit.append("dev.expiry.tampered", None, request_id=rid)
             audit.append("dev.expired", None, request_id=rid)
         return req
 
     # 3. approval
     def approve(self, rid: str, approver: str, reason: str = "") -> dict:
+        self._halt_checks(self._get(rid)["proposer"], "approve")
         if self._expire_if_due(rid)["status"] == "expired":
             raise GateError(409, "approval window expired; submit a new proposal")
 
@@ -169,6 +257,13 @@ class DevGate:
         if h != req["payload_hash"]:
             audit.append("dev.payload_mismatch", caller, request_id=rid, expected=req["payload_hash"], got=h)
             raise GateError(409, "action/payload differ from the approved request; a new approval is required")
+        self._halt_checks(req["proposer"], "execute")
+        allowed = {req["proposer"]}
+        if self.policy.data.get("execute_by", "proposer_or_owner") == "proposer_or_owner":
+            allowed |= set(req.get("owners") or [])
+        if caller not in allowed:  # RT-07: an approval is bound to whoever proposed it
+            audit.append("dev.execute.forbidden", caller, request_id=rid, proposer=req["proposer"])
+            raise GateError(403, "only the proposer (or its owner) may execute this request")
         if self._expire_if_due(rid)["status"] == "expired":
             raise GateError(409, "approval window expired; submit a new proposal")
 
@@ -200,9 +295,16 @@ class DevGate:
         rid = req["request_id"]
         ad = self.adapters[req["action"]]
         audit.append("dev.execute.claimed", caller, request_id=rid, payload_hash=h)
+        ctx = {"request_id": rid, "caller": caller}
+        if getattr(ad, "live", False):  # RT-10: live adapters need a fresh single-use claim token
+            ctx["claim_token"] = _claims.mint(rid, h)
+            spath = getattr(self.store, "path", None)
+            if spath and spath != ":memory:":
+                ctx["claim_nonce_db"] = spath  # shared across workers (used-nonce table)  # real time: adapters verify against real time
+            ctx["payload_hash"] = h
         try:
             result = ad.execute(req["action"], json.loads(json.dumps(req["payload"])),
-                                {"request_id": rid, "caller": caller})
+                                ctx)
             err = None
         except Exception as e:
             result, err = None, f"adapter error ({type(e).__name__})"
@@ -219,4 +321,5 @@ class DevGate:
     @staticmethod
     def _public(req: dict) -> dict:
         return {k: req[k] for k in ("request_id", "action", "tier", "category", "known", "status",
-                                    "approvals_required", "approvals", "payload_hash", "reasons", "expires_at")}
+                                    "approvals_required", "approvals", "payload_hash", "reasons", "expires_at")} | \
+            {k: req.get(k) for k in ("destructive", "blast_radius", "advisory")}
