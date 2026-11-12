@@ -36,7 +36,7 @@ kill switch, and append-only tamper-evident audit behavior remain in place.
 This is an authority check, **not a sandbox or test runner**. Exact string scope does not prove a
 command is safe; adapter/plugin/subprocess isolation is unverified. The declared isolation flags are
 evidence requirements, not technical enforcement. Applications must inject a durable SQLite path;
-the default is in-memory. Grant administration routes, authenticated grant/revoke signers (currently ordinary method
-arguments, not verified identities), deployment wiring, charter records, OS/container isolation, command/resource limits, and recovery from `executing` remain open.
+the default is in-memory. Grant/revoke routes with authenticated signers and API wiring were added later (see `docs/completeness-pass.md`),
+but the signer attestation is a trust-boundary check, not a second factor. Human-reviewed recovery from `executing` was also added. Still open: charter records, OS/container isolation, and command/resource limits.
 Matthew must still decide whether builds/policy changes need his additional approval and who may
 grant/revoke each capability. No external write, push, or deployment is enabled.

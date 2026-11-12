@@ -8,9 +8,13 @@ The default store is in-memory. Applications must inject a durable store path to
 """
 from __future__ import annotations
 
+import math
 import sqlite3
 import time
 from typing import Callable, Optional
+
+import audit
+from . import claims as _claims
 
 LEVELS = range(5)
 BASES = ("human_decision", "observed_test", "local_documentation", "primary_public_source", "hypothesis")
@@ -22,6 +26,9 @@ class AuthorityError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
         self.status, self.message = status, message
+
+
+ATTEST_TTL_SECONDS = 60
 
 
 class CapabilityAuthority:
@@ -53,6 +60,28 @@ class CapabilityAuthority:
     def _conn(self):
         return self._memory if self._memory is not None else sqlite3.connect(self.path, timeout=30)
 
+    def attest(self, user: str, purpose: str, subject: str, ttl: int = ATTEST_TTL_SECONDS) -> str:
+        """Mint a short-lived assertion that `user` was authenticated as a human admin for ONE
+        grant or revoke of `subject` (the grant id). Only the API layer should call this, after
+        its own authentication dependency has verified the person. It is HMAC-signed with the
+        gate's claim secret, so a caller cannot make one up, but any code running in this process
+        with the secret can: it moves the trust boundary to the authenticating route, it is not
+        a second authentication factor."""
+        exp = int(self.clock()) + max(1, min(int(ttl), ATTEST_TTL_SECONDS))
+        return f"{exp}.{_claims.sign_fields('authority-attest-v1', purpose, user, subject, exp)}"
+
+    def _verify_attestation(self, attestation, purpose: str, user: str, subject: str) -> None:
+        """Fail closed (401) unless the attestation is current, unforged and bound to this user,
+        purpose and grant id."""
+        try:
+            exp_s, _, sig = str(attestation).partition(".")
+            exp = int(exp_s)
+        except (TypeError, ValueError):
+            raise AuthorityError(401, "an authenticated human attestation is required")
+        if self.clock() >= exp or exp > self.clock() + ATTEST_TTL_SECONDS + 5 \
+                or not _claims.check_fields(sig, "authority-attest-v1", purpose, user, subject, exp):
+            raise AuthorityError(401, "an authenticated human attestation is required")
+
     @staticmethod
     def _text(value, field: str, limit: int = 200) -> str:
         if not isinstance(value, str) or not value.strip() or len(value.strip()) > limit:
@@ -62,10 +91,14 @@ class CapabilityAuthority:
     def grant(self, *, grant_id: str, actor: str, action: str, resource: str, scope: dict,
               granted_by: str, human_owner: str, owners: list[str], max_level: int,
               expires_at: float, max_action_ttl_seconds: int, isolation: dict,
-              evidence: dict) -> dict:
-        """Record a named human's grant; the human owner cannot grant their own agent."""
+              evidence: dict, attestation: Optional[str] = None) -> dict:
+        """Record a named human's grant; the human owner cannot grant their own agent.
+
+        `attestation` (see attest()) proves the API layer authenticated `granted_by`; without a
+        valid one the grant is refused (401) and nothing is stored."""
         now = self.clock()
         grant_id = self._text(grant_id, "grant_id", 100)
+        self._verify_attestation(attestation, "grant", self._text(granted_by, "granted_by", 100), grant_id)
         actor = self._text(actor, "actor", 100)
         action = self._text(action, "action", 100)
         if action not in self._grant_actions:
@@ -87,7 +120,6 @@ class CapabilityAuthority:
             raise AuthorityError(422, "grant expiry and action TTL must be numeric")
         if ttl != max_action_ttl_seconds:
             raise AuthorityError(422, "max_action_ttl_seconds must be an integer")
-        import math
         if not math.isfinite(expires_at):
             raise AuthorityError(422, "grant expiry must be finite")
         if expires_at <= now:
@@ -120,6 +152,10 @@ class CapabilityAuthority:
                 raise AuthorityError(409, "grant_id already has an event; choose a new id")
             c.execute("INSERT INTO capability_events(grant_id,event_type,body,created_at) VALUES(?,?,?,?)",
                       (grant_id, "grant", self._encode(body), now))
+        audit.append("dev.authority.granted", granted_by, grant_id=grant_id, agent=actor, action=action,
+                     resource=resource, scope=scope, owners=owners, max_level=max_level,
+                     expires_at=expires_at, max_action_ttl_seconds=ttl, isolation=isolation,
+                     evidence=evidence)
         return {"grant_id": grant_id, **body}
 
     @staticmethod
@@ -127,15 +163,17 @@ class CapabilityAuthority:
         import json
         return json.dumps(body, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
-    def revoke(self, grant_id: str, revoked_by: str, reason: str) -> dict:
+    def revoke(self, grant_id: str, revoked_by: str, reason: str, attestation: Optional[str] = None) -> dict:
         grant_id = self._text(grant_id, "grant_id", 100)
         revoked_by = self._text(revoked_by, "revoked_by", 100)
         reason = self._text(reason, "reason", 1000)
+        self._verify_attestation(attestation, "revoke", revoked_by, grant_id)
         with self._conn() as c:
             if not c.execute("SELECT 1 FROM capability_events WHERE grant_id=?", (grant_id,)).fetchone():
                 raise AuthorityError(404, "unknown grant")
             c.execute("INSERT INTO capability_events(grant_id,event_type,body,created_at) VALUES(?,?,?,?)",
                       (grant_id, "revoke", self._encode({"revoked_by": revoked_by, "reason": reason}), self.clock()))
+        audit.append("dev.authority.revoked", revoked_by, grant_id=grant_id, reason=reason)
         return {"grant_id": grant_id, "revoked": True}
 
     def _current(self, grant_id: str) -> Optional[tuple[str, dict]]:
@@ -170,7 +208,6 @@ class CapabilityAuthority:
             request_expires_at = float(request_expires_at)
         except (TypeError, ValueError):
             raise AuthorityError(403, "request expiry is invalid")
-        import math
         if not math.isfinite(request_expires_at) or request_expires_at <= now:
             raise AuthorityError(403, "request expiry is invalid")
         if request_expires_at > min(grant["expires_at"], now + grant["max_action_ttl_seconds"]):
@@ -178,3 +215,19 @@ class CapabilityAuthority:
         return {"grant_id": grant_id, "granted_by": grant["granted_by"],
                 "human_owner": grant["human_owner"], "max_level": grant["max_level"],
                 "evidence": grant["evidence"], "isolation": grant["isolation"]}
+
+
+_SHARED: dict = {}
+
+
+def default_authority() -> CapabilityAuthority:
+    """One durable grant store per path per process. PATIENCE_DEV_AUTHORITY_DB defaults to
+    patience_dev_authority.db (git-ignored); ':memory:' is allowed for tests only."""
+    import os
+    path = os.environ.get("PATIENCE_DEV_AUTHORITY_DB", "patience_dev_authority.db")
+    if path == ":memory:":
+        return CapabilityAuthority()
+    a = _SHARED.get(path)
+    if a is None or not os.path.exists(path):
+        a = _SHARED[path] = CapabilityAuthority(path=path)
+    return a

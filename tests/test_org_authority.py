@@ -39,7 +39,13 @@ def grant(authority, clock, **overrides):
               "evidence": {"basis": "human_decision", "reference": "local test scope",
                            "confidence": "high", "reason": "directly granted for this isolated action"}}
     values.update(overrides)
+    if "attestation" not in values:
+        values["attestation"] = authority.attest(values["granted_by"], "grant", values["grant_id"])
     return authority.grant(**values)
+
+
+def revoke(authority, grant_id, by, reason):
+    return authority.revoke(grant_id, by, reason, attestation=authority.attest(by, "revoke", grant_id))
 
 
 def adapter():
@@ -79,7 +85,7 @@ def test_revocation_after_proposal_blocks_execution(clock, authority):
     grant(authority, clock)
     gate = DevGate(clock=clock, authority=authority, adapters=[adapter()])
     r = gate.propose("test.run_isolated", PAYLOAD, "agent-1", owners=["matthew"], authority_grant="grant-test")
-    authority.revoke("grant-test", "reviewer", "scope retired")
+    revoke(authority, "grant-test", "reviewer", "scope retired")
     with pytest.raises(GateError) as e:
         gate.execute(r["request_id"], "test.run_isolated", {**PAYLOAD, "authority_grant": "grant-test"}, "agent-1")
     assert e.value.status == 403 and "revoked" in e.value.message
@@ -149,7 +155,7 @@ def test_grant_survives_store_reopen_and_revocation_is_immutable(clock, tmp_path
     reopened = CapabilityAuthority(path=path, clock=clock)
     assert reopened.require(grant_id="grant-test", actor="agent-1", action="test.run_isolated",
                             payload=PAYLOAD, owners=["matthew"], request_expires_at=clock() + 100)
-    reopened.revoke("grant-test", "reviewer", "retired")
+    revoke(reopened, "grant-test", "reviewer", "retired")
     with pytest.raises(AuthorityError):
         reopened.require(grant_id="grant-test", actor="agent-1", action="test.run_isolated",
                          payload=PAYLOAD, owners=["matthew"], request_expires_at=clock() + 100)

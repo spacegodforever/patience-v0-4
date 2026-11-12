@@ -27,6 +27,25 @@ class ResolveIn(BaseModel):
     note: str = Field(..., min_length=1, max_length=1000)
 
 
+class GrantIn(BaseModel):
+    grant_id: str = Field(..., min_length=1, max_length=100)
+    actor: str = Field(..., min_length=1, max_length=100)
+    action: str = Field(..., min_length=1, max_length=100)
+    resource: str = Field(..., min_length=1, max_length=500)
+    scope: Dict[str, str]
+    human_owner: str = Field(..., min_length=1, max_length=100)
+    owners: list[str] = Field(..., min_length=1, max_length=20)
+    max_level: int
+    expires_at: float
+    max_action_ttl_seconds: int
+    isolation: Dict[str, Any]
+    evidence: Dict[str, Any]
+
+
+class RevokeIn(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=1000)
+
+
 class ReconcileIn(BaseModel):
     min_age_seconds: float = Field(300, ge=0, le=86400 * 30)
 
@@ -55,7 +74,8 @@ def owners_of(caller: dict) -> list:
     return [x.strip() for x in out if x and x.strip()]
 
 
-def make_router(gate_factory: Callable[[], DevGate], caller_dep: Callable, approver_dep: Callable) -> APIRouter:
+def make_router(gate_factory: Callable[[], DevGate], caller_dep: Callable, approver_dep: Callable,
+                authority_factory: Optional[Callable] = None, admin_dep: Optional[Callable] = None) -> APIRouter:
     r = APIRouter(prefix="/v1/dev")
     base_approver = approver_dep
 
@@ -113,5 +133,36 @@ def make_router(gate_factory: Callable[[], DevGate], caller_dep: Callable, appro
     @r.post("/breaker/{agent}/reset")
     def breaker_reset(agent: str, body: DecideIn = DecideIn(), who: dict = Depends(approver_dep)):
         return _run(lambda: gate_factory().reset_breaker(agent, who["user"], body.reason))
+
+    if authority_factory is not None and admin_dep is not None:
+        base_admin = admin_dep
+
+        def grant_admin_dep(who: dict = Depends(base_admin)) -> dict:
+            """Grant/revoke is the most privileged dev-gate action: a named admin account only."""
+            if who.get("legacy") or who.get("role") != "admin":
+                raise HTTPException(403, "A named admin account is required to grant or revoke capabilities")
+            return who
+
+        def _authority_run(fn):
+            from .authority import AuthorityError
+            try:
+                return fn()
+            except AuthorityError as e:
+                raise HTTPException(e.status, e.message)
+
+        @r.post("/authority/grants")
+        def grant(body: GrantIn, who: dict = Depends(grant_admin_dep)):
+            """The signer is the authenticated admin, never a field in the request body."""
+            a = authority_factory()
+            fields = body.model_dump()
+            return _authority_run(lambda: a.grant(
+                **fields, granted_by=who["user"],
+                attestation=a.attest(who["user"], "grant", body.grant_id)))
+
+        @r.post("/authority/grants/{grant_id}/revoke")
+        def revoke(grant_id: str, body: RevokeIn, who: dict = Depends(grant_admin_dep)):
+            a = authority_factory()
+            return _authority_run(lambda: a.revoke(
+                grant_id, who["user"], body.reason, attestation=a.attest(who["user"], "revoke", grant_id)))
 
     return r
