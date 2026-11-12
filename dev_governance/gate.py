@@ -21,6 +21,7 @@ from . import destructive as _destructive
 from . import breaker as _breaker
 import tiers as _tiers
 from .store import MemoryStore, default_store
+from .authority import AuthorityError
 
 
 class GateError(Exception):
@@ -61,13 +62,14 @@ _MAX_CAS_RETRIES = 50
 
 class DevGate:
     def __init__(self, policy: Optional[DevPolicy] = None, adapters: Optional[list[Adapter]] = None,
-                 clock: Callable[[], float] = time.time, store=None, breaker=None):
+                 clock: Callable[[], float] = time.time, store=None, breaker=None, authority=None):
         self.policy = policy or load_policy()
         self.adapters: dict[str, Adapter] = {}
         for a in (adapters if adapters is not None else default_adapters()):
             for act in a.actions:
                 self.adapters[act] = a
         self.clock = clock
+        self.authority = authority
         self.store = store if store is not None else MemoryStore()
         spath = getattr(self.store, "path", None)
         if spath and spath != ":memory:":
@@ -103,14 +105,36 @@ class DevGate:
     # 1. propose + 2. policy
     def propose(self, action: str, payload: dict, proposer: str, floor: Optional[str] = None,
                 owners: Optional[list] = None, require_owners: bool = False,
-                text: Optional[str] = None) -> dict:
+                text: Optional[str] = None, authority_grant: Optional[str] = None) -> dict:
         """owners: human approver usernames responsible for `proposer` (RT-03); they may not approve.
         require_owners: fail closed if a non-low request has no owner mapping."""
         action = (action or "").strip().lower()
         if not proposer:
             raise GateError(400, "proposer is required")
         self._halt_checks(proposer, "propose")
-        stored = json.loads(canonical_json(payload or {}))  # 422 on non-JSON values (RT-06)
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise GateError(422, "payload must be a JSON object")
+        owners = sorted({str(o).strip() for o in (owners or []) if str(o).strip()})
+        # A risk tier classifies impact; it does not grant capability. Only this new isolated-test
+        # action uses an explicit grant, leaving legacy CI policy unchanged pending human review.
+        if action == "test.run_isolated":
+            if self.authority is None:
+                audit.append("dev.authority.refused", proposer, action=action, reason="no_authority_store")
+                raise GateError(403, "a human-granted isolated test capability is required")
+            try:
+                self.authority.require(grant_id=authority_grant, actor=proposer, action=action,
+                                       payload=payload, owners=owners,
+                                       request_expires_at=self.clock() + self.policy.ttl)
+            except AuthorityError as e:
+                audit.append("dev.authority.refused", proposer, action=action, reason=e.message)
+                raise GateError(e.status, e.message)
+        stored = json.loads(canonical_json(payload))  # 422 on non-JSON values (RT-06)
+        if authority_grant is not None:
+            if action != "test.run_isolated" or not isinstance(authority_grant, str) or not authority_grant.strip():
+                raise GateError(422, "authority_grant is accepted only for test.run_isolated")
+            stored["authority_grant"] = authority_grant.strip()
         ad = self.adapters.get(action)
         if ad is not None and hasattr(ad, "validate"):
             try:
@@ -137,7 +161,6 @@ class DevGate:
             a.tier = raised
             a.approvals_required = max(a.approvals_required,
                                        _tiers.approvals_required(raised, self.policy.required_overrides))
-        owners = sorted({str(o).strip() for o in (owners or []) if str(o).strip()})
         if require_owners and not owners and a.approvals_required > 0:
             audit.append("dev.propose.rejected", proposer, action=action, reason="no_owner_mapping")
             raise GateError(403, "proposer has no owner mapping; non-low dev actions are refused (set owners)")
@@ -258,6 +281,16 @@ class DevGate:
             audit.append("dev.payload_mismatch", caller, request_id=rid, expected=req["payload_hash"], got=h)
             raise GateError(409, "action/payload differ from the approved request; a new approval is required")
         self._halt_checks(req["proposer"], "execute")
+        if req["action"] == "test.run_isolated":
+            if self.authority is None:
+                raise GateError(403, "a human-granted isolated test capability is required")
+            try:
+                self.authority.require(grant_id=req["payload"].get("authority_grant"),
+                                       actor=req["proposer"], action=req["action"], payload=req["payload"],
+                                       owners=req.get("owners") or [], request_expires_at=req["expires_at"])
+            except AuthorityError as e:
+                audit.append("dev.authority.refused", caller, request_id=rid, reason=e.message)
+                raise GateError(e.status, e.message)
         allowed = {req["proposer"]}
         if self.policy.data.get("execute_by", "proposer_or_owner") == "proposer_or_owner":
             allowed |= set(req.get("owners") or [])
@@ -283,6 +316,7 @@ class DevGate:
             if self.adapters.get(req["action"]) is None:
                 raise GateError(501, f"no adapter configured for {req['action']!r}")
             req["claimed_from"] = s
+            req["claimed_at"] = self.clock()
             req["status"] = "executing"
             return True, "claimed"
         req, _, what = self._update(rid, claim)
@@ -315,8 +349,82 @@ class DevGate:
         if not self.store.cas(req):  # we hold the claim; nobody else can legally write
             audit.append("dev.execute.finalize_conflict", caller, request_id=rid)
         audit.append("dev.executed" if err is None else "dev.execute.failed", caller, request_id=rid,
-                     simulated=getattr(ad, "simulated", True), error=err)
+                     simulated=getattr(ad, "simulated", True), error=err,
+                     dry_run=bool(isinstance(result, dict) and result.get("dry_run")))
         return 200, {"status": "executed" if err is None else "failed", "request_id": rid, "result": result, "error": err}
+
+    # 6. crash recovery: 'executing' left behind by a dead process becomes 'needs_review'
+    def flag_stuck_executions(self, actor: str, min_age_seconds: float = 300,
+                              request_ids: Optional[list] = None) -> list:
+        """Move requests stuck in 'executing' for at least min_age_seconds to 'needs_review'.
+
+        Never retries: the side effect may or may not have happened. Only a named human, via
+        resolve_review(), can close the request. Each flagged request is audited. By default every
+        request the store lists as 'executing' is inspected; pass request_ids to limit the sweep.
+        Use a min age above the slowest adapter timeout so a live execution is not flagged.
+        """
+        if not actor:
+            raise GateError(403, "a human approver is required to flag stuck executions")
+        try:
+            min_age = float(min_age_seconds)
+        except (TypeError, ValueError):
+            raise GateError(422, "min_age_seconds must be a number")
+        if min_age < 0 or min_age != min_age:
+            raise GateError(422, "min_age_seconds must be >= 0")
+        ids = request_ids
+        if ids is None:
+            lister = getattr(self.store, "list_by_status", None)
+            ids = lister("executing") if lister else []
+        flagged = []
+        for rid in ids:
+            seen = {}
+
+            def m(req):
+                if req["status"] != "executing":
+                    return False, None
+                at = req.get("claimed_at")
+                age = float("inf") if not isinstance(at, (int, float)) else self.clock() - at
+                if age < min_age:
+                    return False, None
+                req["status"] = "needs_review"
+                req["flagged_at"] = self.clock()
+                req["flagged_by"] = actor
+                seen["from"] = at
+                return True, None
+            try:
+                req, changed, _ = self._update(rid, m)
+            except GateError:
+                continue  # unknown id or contention: leave it for the next sweep
+            if changed:
+                audit.append("dev.execute.needs_review", actor, request_id=rid, claimed_at=seen["from"],
+                             payload_hash=req["payload_hash"])
+                flagged.append(rid)
+        return flagged
+
+    def resolve_review(self, rid: str, approver: str, outcome: str, note: str = "") -> dict:
+        """A named human records what really happened to a 'needs_review' request after checking the
+        target system. The request ends 'executed' (terminal) either way; it can never run again.
+        The proposer and the proposer's owners cannot resolve it (same separation as approval)."""
+        if outcome not in ("executed", "failed"):
+            raise GateError(422, "outcome must be 'executed' or 'failed'")
+        if not isinstance(note, str) or not note.strip():
+            raise GateError(422, "a note describing what was checked is required")
+
+        def m(req):
+            if req["status"] != "needs_review":
+                raise GateError(409, f"request is {req['status']}, not needs_review")
+            if not approver or approver == req["proposer"] or approver in (req.get("owners") or []):
+                audit.append("dev.self_resolution_rejected", approver, request_id=rid)
+                raise GateError(403, "the proposer or its owner cannot resolve its own interrupted request")
+            req["status"] = "executed"
+            req["resolution"] = {"outcome": outcome, "resolved_by": approver, "resolved_at": self.clock(),
+                                 "note": note.strip()[:1000]}
+            req["error"] = None if outcome == "executed" else "execution interrupted; human recorded that it failed"
+            return True, None
+        req, _, _ = self._update(rid, m)
+        audit.append("dev.execute.resolved", approver, request_id=rid, outcome=outcome,
+                     note=note.strip()[:1000], payload_hash=req["payload_hash"])
+        return self._public(req)
 
     def status(self, rid: str) -> dict:
         return self._public(self._expire_if_due(rid))
