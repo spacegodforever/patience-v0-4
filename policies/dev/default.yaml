@@ -52,3 +52,7 @@ actions:
   repo.delete:         {tier: critical, category: code_destructive}
   data.wipe:           {tier: critical, category: data_destructive}
   infra.destroy:       {tier: critical, category: infra}
+  # GitHub read-only (phase 1 of the live adapter)
+  code.get_repo:       {tier: low, category: code_read}
+  code.list_prs:       {tier: low, category: code_read}
+  code.get_pr_diff:    {tier: low, category: code_read}

@@ -55,7 +55,7 @@ Live adapters (3) come last and only behind everything above.
   own agent's proposal. Dev requests aren't shown on the Command Board / dashboard yet, and no
   notification is sent for them.
 
-## Gap 3: no live adapters — DESIGN ONLY (no live network code on this branch)
+## Gap 3: no live adapters — DESIGN (implemented on `feat/github-adapter`, see docs/github-adapter.md)
 
 - **Risk if left:** the gate governs only simulations, so it can't yet stop a real action.
   Risk if done badly: a live adapter with broad credentials is a bigger hazard than none.

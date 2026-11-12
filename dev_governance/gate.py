@@ -295,7 +295,8 @@ class DevGate:
         rid = req["request_id"]
         ad = self.adapters[req["action"]]
         audit.append("dev.execute.claimed", caller, request_id=rid, payload_hash=h)
-        ctx = {"request_id": rid, "caller": caller}
+        ctx = {"request_id": rid, "caller": caller, "payload_hash": h, "tier": req["tier"],
+               "approved": req.get("claimed_from") in ("approved", "allowed")}
         if getattr(ad, "live", False):  # RT-10: live adapters need a fresh single-use claim token
             ctx["claim_token"] = _claims.mint(rid, h)
             spath = getattr(self.store, "path", None)
@@ -309,6 +310,8 @@ class DevGate:
         except Exception as e:
             result, err = None, f"adapter error ({type(e).__name__})"
         req["result"], req["error"], req["status"] = result, err, "executed"
+        if err is None and isinstance(result, dict) and result.get("dry_run"):
+            req["status"] = req["claimed_from"]  # a dry run sends nothing, so it does not consume the approval
         if not self.store.cas(req):  # we hold the claim; nobody else can legally write
             audit.append("dev.execute.finalize_conflict", caller, request_id=rid)
         audit.append("dev.executed" if err is None else "dev.execute.failed", caller, request_id=rid,
