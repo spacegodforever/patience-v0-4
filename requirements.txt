@@ -11,3 +11,4 @@ mcp>=1.2
 pandas
 altair
 cryptography>=41
+pydantic>=2
