@@ -88,6 +88,15 @@ class DevGate:
             audit.append("dev.breaker.held", agent, what=what)
             raise GateError(423, f"agent {agent!r} is frozen by the circuit breaker; a human approver must reset it")
 
+    @staticmethod
+    def _audit_required(event: str, actor: Optional[str], **data) -> None:
+        """Audit write that must succeed: if the log cannot be written the caller gets 503 and the
+        attempt is refused (fail closed) instead of silently going unrecorded."""
+        try:
+            audit.append(event, actor, **data)
+        except Exception:
+            raise GateError(503, "audit log unavailable; refused (fail closed)")
+
     def _trip_check(self, agent: str, kind: str) -> None:
         reason = self.breaker.record(agent, kind)
         if reason:
@@ -314,6 +323,9 @@ class DevGate:
         def claim(req):
             s = req["status"]
             if s == "denied":
+                # accountability: a denied request that someone still tries to execute is recorded;
+                # if the audit write fails the attempt is refused with 503 (fail closed)
+                self._audit_required("dev.execute.denied_attempt", caller, request_id=rid, payload_hash=h)
                 raise GateError(403, "request was denied")
             if s in ("executed", "executing"):
                 raise GateError(409, "this approval was already used")
@@ -332,6 +344,8 @@ class DevGate:
             return True, "claimed"
         req, _, what = self._update(rid, claim)
         if what == "pending":
+            self._audit_required("dev.execute.unapproved_attempt", caller, request_id=rid, payload_hash=h,
+                                 approvals=len(req["approvals"]), required=req["approvals_required"])
             return 202, {"status": "pending_approval", "request_id": rid,
                          "approvals": len(req["approvals"]), "required": req["approvals_required"]}
         return self._run_claimed(req, h, caller)

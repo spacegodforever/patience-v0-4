@@ -50,6 +50,17 @@ class ReconcileIn(BaseModel):
     min_age_seconds: float = Field(300, ge=0, le=86400 * 30)
 
 
+def _load_report_tool():
+    """tools/audit_report.py is a standalone stdlib-only script; load it by path."""
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "patience_audit_report", Path(__file__).resolve().parent.parent / "tools" / "audit_report.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _run(fn):
     try:
         return fn()
@@ -102,6 +113,35 @@ def make_router(gate_factory: Callable[[], DevGate], caller_dep: Callable, appro
     @r.get("/requests/{rid}")
     def status(rid: str, caller: dict = Depends(caller_dep)):
         return _run(lambda: gate_factory().status(rid))
+
+    @r.get("/requests/{rid}/decision")
+    def decision(rid: str, caller: dict = Depends(caller_dep)):
+        """Read-only, versioned (`decision-v1`) machine-readable view of one request. Same auth as
+        GET /requests/{rid}; raw payload values and permit strings are never included."""
+        from .decision_schema import export_decision
+        return _run(lambda: export_decision(gate_factory(), rid))
+
+    @r.get("/admin/audit-report")
+    def audit_report(agent: Optional[str] = None, since: Optional[str] = None, until: Optional[str] = None,
+                     format: str = "json", who: dict = Depends(approver_dep)):
+        """Read-only redacted audit report (named approver accounts only; never modifies the log).
+        Verify offline with `python3 tools/audit_report.py verify REPORT LOG`."""
+        import audit as _audit
+        from fastapi.responses import PlainTextResponse
+        tool = _load_report_tool()
+        if format not in ("json", "md", "csv"):
+            raise HTTPException(422, "format must be json, md or csv")
+        try:
+            rep = tool.finalize(tool.build_report(str(_audit.path()), agent, since, until))
+        except ValueError as e:
+            raise HTTPException(503 if str(e).startswith("audit chain") else 422,
+                                "audit chain does not verify; no report produced" if str(e).startswith("audit chain")
+                                else "invalid filter (since/until must be ISO-8601)")
+        if format == "md":
+            return PlainTextResponse(tool.to_markdown(rep), media_type="text/markdown")
+        if format == "csv":
+            return PlainTextResponse(tool.to_csv(rep), media_type="text/csv")
+        return rep
 
     @r.post("/requests/{rid}/approve")
     def approve(rid: str, body: DecideIn = DecideIn(), who: dict = Depends(approver_dep)):

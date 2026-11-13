@@ -1,0 +1,185 @@
+{
+  "$defs": {
+    "Basis": {
+      "additionalProperties": false,
+      "properties": {
+        "fact": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Fact",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        }
+      },
+      "required": [
+        "fact",
+        "source"
+      ],
+      "title": "Basis",
+      "type": "object"
+    },
+    "Confidence": {
+      "additionalProperties": false,
+      "description": "MODEL-REPORTED, not calibrated. Bounded to three labelled levels.",
+      "properties": {
+        "level": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Level",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 400,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "level",
+        "reason"
+      ],
+      "title": "Confidence",
+      "type": "object"
+    },
+    "RiskHint": {
+      "additionalProperties": false,
+      "description": "A suggested MINIMUM tier. It can only raise (see cap_floor / effective_tier); 'low' is a no-op.",
+      "properties": {
+        "floor": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "title": "Floor",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 300,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "floor",
+        "reason"
+      ],
+      "title": "RiskHint",
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "request_payload",
+            "request_text",
+            "policy",
+            "advisory",
+            "audit_entry",
+            "attached_doc",
+            "human_note"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "quote": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quote"
+        },
+        "ref": {
+          "pattern": "^ctx:[A-Za-z0-9_.\\-]{1,64}$",
+          "title": "Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "title": "Source",
+      "type": "object"
+    }
+  },
+  "$id": "https://patience.local/schemas/oracle-rec-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "maxLength": 100,
+      "pattern": "^([a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+|none|ask_human)$",
+      "title": "Action",
+      "type": "string"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 10,
+      "title": "Assumptions",
+      "type": "array"
+    },
+    "basis": {
+      "items": {
+        "$ref": "#/$defs/Basis"
+      },
+      "maxItems": 12,
+      "minItems": 1,
+      "title": "Basis",
+      "type": "array"
+    },
+    "confidence": {
+      "$ref": "#/$defs/Confidence"
+    },
+    "rationale": {
+      "maxLength": 1200,
+      "minLength": 1,
+      "title": "Rationale",
+      "type": "string"
+    },
+    "risk_hint": {
+      "$ref": "#/$defs/RiskHint"
+    },
+    "schema_version": {
+      "const": "oracle-rec-v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "unknowns": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 10,
+      "title": "Unknowns",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "action",
+    "rationale",
+    "basis",
+    "confidence",
+    "unknowns",
+    "risk_hint"
+  ],
+  "title": "Recommendation",
+  "type": "object"
+}
