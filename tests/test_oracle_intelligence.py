@@ -542,7 +542,7 @@ def test_forward_migration_preserves_data_and_refuses_newer_db(tmp_path):
     c.execute("INSERT INTO intelligence_sources VALUES ('src_x','Old Source','public_market','manual',NULL,'d','l','m','[\"*\"]',1,'2026-01-01T00:00:00+00:00')")
     c.commit(); c.close()
     st = Store(p)
-    assert st.schema_version() == SCHEMA_VERSION == 2
+    assert st.schema_version() == SCHEMA_VERSION == 3
     assert st.query("SELECT name FROM intelligence_sources")[0][0] == "Old Source"
     for t in ("analytical_queries", "hypotheses", "forecasts", "forecast_outcomes", "intelligence_reports", "intelligence_entities",
               "entity_relationships", "intelligence_records", "intelligence_sources"):
@@ -572,6 +572,8 @@ def test_intelligence_code_cannot_reach_the_gate_or_network():
                    "executors"}
     banned_names = {"approve", "execute", "run_action", "grant", "decide"}
     for p in (ROOT / "oracle_intelligence").glob("*.py"):
+        if p.name == "https_transport.py":
+            continue    # the one network module (SEC EDGAR connector); its imports are pinned in test_oracle_intel_sec_edgar.py
         tree = ast.parse(p.read_text())
         for n in ast.walk(tree):
             mods = []

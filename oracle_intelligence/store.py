@@ -12,7 +12,7 @@ from typing import Optional
 
 from dev_governance import fsperm as _fsperm
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 M1 = [
     "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)",
@@ -65,7 +65,47 @@ M2 = [
         created_at TEXT NOT NULL, created_by TEXT NOT NULL, schema_version TEXT NOT NULL, report_hash TEXT NOT NULL,
         body TEXT NOT NULL)""",
 ]
-MIGRATIONS = [M1, M2]
+M3 = [
+    # connector source policy (license / terms / rate / robots) stored with the source; the policy text is frozen
+    # (trigger), only the approver-controlled live switch may change.
+    """CREATE TABLE intelligence_source_policies (
+        source_id TEXT PRIMARY KEY REFERENCES intelligence_sources(source_id), connector TEXT NOT NULL,
+        policy_json TEXT NOT NULL, policy_hash TEXT NOT NULL, recorded_by TEXT NOT NULL, recorded_at TEXT NOT NULL,
+        live_enabled INTEGER NOT NULL DEFAULT 0, live_changed_by TEXT, live_changed_at TEXT)""",
+    """CREATE TRIGGER intelligence_source_policies_frozen BEFORE UPDATE OF source_id, connector, policy_json, policy_hash,
+       recorded_by, recorded_at ON intelligence_source_policies
+       BEGIN SELECT RAISE(ABORT, 'intelligence_source_policies policy text is write-once (update blocked)'); END""",
+    """CREATE TRIGGER intelligence_source_policies_no_delete BEFORE DELETE ON intelligence_source_policies
+       BEGIN SELECT RAISE(ABORT, 'intelligence_source_policies is write-once (delete blocked)'); END""",
+    # raw fetched responses, exactly as received (zlib-compressed), write-once, deduplicated by content hash
+    """CREATE TABLE intelligence_raw_fetches (
+        fetch_id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES intelligence_sources(source_id), dataset TEXT NOT NULL,
+        cik TEXT NOT NULL, url TEXT NOT NULL, fetched_at TEXT NOT NULL, http_status INTEGER NOT NULL, content_type TEXT,
+        size_bytes INTEGER NOT NULL, content_hash TEXT NOT NULL, raw_z BLOB NOT NULL, fetched_by TEXT NOT NULL,
+        UNIQUE (source_id, content_hash))""",
+    """CREATE TRIGGER intelligence_raw_fetches_no_update BEFORE UPDATE ON intelligence_raw_fetches
+       BEGIN SELECT RAISE(ABORT, 'intelligence_raw_fetches is write-once (update blocked)'); END""",
+    """CREATE TRIGGER intelligence_raw_fetches_no_delete BEFORE DELETE ON intelligence_raw_fetches
+       BEGIN SELECT RAISE(ABORT, 'intelligence_raw_fetches is write-once (delete blocked)'); END""",
+    # which ingest batch a stored response produced (absent link = stored but not yet ingested; safe to retry)
+    """CREATE TABLE intelligence_fetch_links (
+        fetch_id TEXT PRIMARY KEY REFERENCES intelligence_raw_fetches(fetch_id), batch_id TEXT, mapped_json TEXT NOT NULL,
+        created_at TEXT NOT NULL)""",
+    """CREATE TRIGGER intelligence_fetch_links_no_update BEFORE UPDATE ON intelligence_fetch_links
+       BEGIN SELECT RAISE(ABORT, 'intelligence_fetch_links is write-once (update blocked)'); END""",
+    """CREATE TRIGGER intelligence_fetch_links_no_delete BEFORE DELETE ON intelligence_fetch_links
+       BEGIN SELECT RAISE(ABORT, 'intelligence_fetch_links is write-once (delete blocked)'); END""",
+    # structured provenance for connector-derived records (accession number, form, fiscal period, filing date ...)
+    """CREATE TABLE intelligence_edgar_provenance (
+        record_id TEXT NOT NULL REFERENCES intelligence_records(record_id), fetch_id TEXT NOT NULL, kind TEXT NOT NULL,
+        cik TEXT NOT NULL, concept TEXT, accession TEXT, form TEXT, fiscal_year INTEGER, fiscal_period TEXT,
+        period_start TEXT, period_end TEXT, filed TEXT, frame TEXT, PRIMARY KEY (record_id, fetch_id))""",
+    """CREATE TRIGGER intelligence_edgar_provenance_no_update BEFORE UPDATE ON intelligence_edgar_provenance
+       BEGIN SELECT RAISE(ABORT, 'intelligence_edgar_provenance is write-once (update blocked)'); END""",
+    """CREATE TRIGGER intelligence_edgar_provenance_no_delete BEFORE DELETE ON intelligence_edgar_provenance
+       BEGIN SELECT RAISE(ABORT, 'intelligence_edgar_provenance is write-once (delete blocked)'); END""",
+]
+MIGRATIONS = [M1, M2, M3]
 
 
 class Store:

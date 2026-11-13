@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import connectors, ingest as _ingest, inquiry as _inquiry, sources as _sources
+from . import connectors, ingest as _ingest, inquiry as _inquiry, sec_edgar as _edgar, sources as _sources
 from .common import IntelError
 from .report import to_markdown
 from .store import Store
@@ -38,6 +38,23 @@ class IngestIn(BaseModel):
     doc_type: Optional[str] = Field(None, max_length=30)
 
 
+class EdgarSourceIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(..., max_length=80)
+    allowed_callers: List[str] = Field(..., max_length=20)
+
+
+class EdgarLiveIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+
+
+class EdgarFetchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    cik: str = Field(..., max_length=10)
+    dataset: str = Field(..., max_length=20)
+
+
 class InquiryIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     question: str = Field(..., max_length=1000)
@@ -55,7 +72,8 @@ def _run(fn):
 
 def make_router(store_factory: Callable[[], Store], caller_dep: Callable, approver_dep: Callable,
                 clock: Optional[Callable[[], float]] = None, model_factory: Optional[Callable[[], Any]] = None,
-                connector_factory: Optional[Callable[[], Any]] = None) -> APIRouter:
+                connector_factory: Optional[Callable[[], Any]] = None,
+                edgar_connector_factory: Optional[Callable[[], Any]] = None) -> APIRouter:
     import time
     clk = clock or time.time
     r = APIRouter(prefix="/v1/intel")
@@ -96,6 +114,26 @@ def make_router(store_factory: Callable[[], Store], caller_dep: Callable, approv
             return _ingest.ingest(st, caller=caller["id"], source_id=source_id, fmt=fmt, content=text, clock=clk,
                                   via_connector=True)
         return _run(go)
+
+    # --- SEC EDGAR connector (OFF by default; see docs/ORACLE_INTEL_SEC_EDGAR_CONNECTOR.md)
+    @r.post("/connectors/sec-edgar/sources")
+    def edgar_register(body: EdgarSourceIn, who: dict = Depends(approver_dep)):
+        return _run(lambda: _edgar.register_edgar_source(store_factory(), actor=who["user"], clock=clk, **body.model_dump()))
+
+    @r.post("/connectors/sec-edgar/sources/{source_id}/live")
+    def edgar_live(source_id: str, body: EdgarLiveIn, who: dict = Depends(approver_dep)):
+        return _run(lambda: _edgar.set_live(store_factory(), actor=who["user"], source_id=source_id, enabled=body.enabled, clock=clk))
+
+    @r.get("/connectors/sec-edgar/policy")
+    def edgar_policy(caller: dict = Depends(caller_dep)):
+        return {"policy": _edgar.POLICY, "policy_hash": _edgar.POLICY_HASH, "live_flags": {
+            "PATIENCE_INTEL_CONNECTORS_LIVE": connectors.live_enabled(), "PATIENCE_INTEL_SEC_EDGAR_LIVE": _edgar.edgar_flag()}}
+
+    @r.post("/connectors/sec-edgar/sources/{source_id}/fetch")
+    def edgar_fetch(source_id: str, body: EdgarFetchIn, caller: dict = Depends(caller_dep)):
+        conn = edgar_connector_factory() if edgar_connector_factory else _edgar.SecEdgarConnector()
+        return _run(lambda: _edgar.fetch_and_ingest(store_factory(), caller=caller["id"], source_id=source_id, cik=body.cik,
+                                                    dataset=body.dataset, clock=clk, connector=conn))
 
     @r.get("/records")
     def records(q: str, source_id: Optional[str] = None, limit: int = 10, caller: dict = Depends(caller_dep)):
