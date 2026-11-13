@@ -15,9 +15,11 @@ sys.path.insert(0, ROOT)
 def schemas() -> dict:
     from dev_governance.decision_schema import DecisionRecord
     from dev_governance.oracle_advisor.schema import Recommendation
+    from oracle_intelligence.report import Report
     out = {}
     for fname, model, sid in (("decision-v1.schema.json", DecisionRecord, "https://patience.local/schemas/decision-v1.json"),
-                              ("oracle-rec-v1.schema.json", Recommendation, "https://patience.local/schemas/oracle-rec-v1.json")):
+                              ("oracle-rec-v1.schema.json", Recommendation, "https://patience.local/schemas/oracle-rec-v1.json"),
+                              ("intel-report-v1.schema.json", Report, "https://patience.local/schemas/intel-report-v1.json")):
         s = model.model_json_schema()
         out[fname] = {"$schema": "https://json-schema.org/draft/2020-12/schema", "$id": sid, **s}
     return out

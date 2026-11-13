@@ -12,6 +12,7 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setenv("PATIENCE_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
     monkeypatch.setenv("PATIENCE_DEV_GATE_DB", str(tmp_path / "dev_gate.db"))
     monkeypatch.setenv("PATIENCE_DEV_AUTHORITY_DB", str(tmp_path / "dev_authority.db"))
+    monkeypatch.setenv("PATIENCE_INTEL_DB", str(tmp_path / "patience_intelligence.db"))
     monkeypatch.setenv("PATIENCE_APPROVERS", str(tmp_path / "approvers.yaml"))
     monkeypatch.setenv("PATIENCE_LEGACY_APPROVER_TOKEN", "1")
     monkeypatch.setenv("PATIENCE_LINK_SECRET", "test-link-secret-0123456789abcdef")

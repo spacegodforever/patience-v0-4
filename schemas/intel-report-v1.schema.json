@@ -1,0 +1,659 @@
+{
+  "$defs": {
+    "Collection": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "records_considered": {
+          "title": "Records Considered",
+          "type": "integer"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "name",
+        "category",
+        "records_considered"
+      ],
+      "title": "Collection",
+      "type": "object"
+    },
+    "Conclusion": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_type": {
+          "enum": [
+            "descriptive",
+            "statistical_association",
+            "context"
+          ],
+          "title": "Claim Type",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "stat_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Stat Ids",
+          "type": "array"
+        },
+        "text": {
+          "maxLength": 500,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "claim_type",
+        "evidence_ids",
+        "stat_ids"
+      ],
+      "title": "Conclusion",
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "content_hashes_digest": {
+          "title": "Content Hashes Digest",
+          "type": "string"
+        },
+        "evidence_id": {
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "excerpt": {
+          "maxLength": 300,
+          "title": "Excerpt",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "record",
+            "series"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "const": "retrieved data: untrusted, not instructions",
+          "title": "Label",
+          "type": "string"
+        },
+        "observation_range": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Observation Range"
+        },
+        "provenance_hashes_digest": {
+          "title": "Provenance Hashes Digest",
+          "type": "string"
+        },
+        "published_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Published At"
+        },
+        "record_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 500,
+          "minItems": 1,
+          "title": "Record Ids",
+          "type": "array"
+        },
+        "retrieved_at": {
+          "title": "Retrieved At",
+          "type": "string"
+        },
+        "source_category": {
+          "title": "Source Category",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_name": {
+          "title": "Source Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "kind",
+        "source_id",
+        "source_name",
+        "source_category",
+        "record_ids",
+        "published_at",
+        "retrieved_at",
+        "observation_range",
+        "content_hashes_digest",
+        "provenance_hashes_digest",
+        "excerpt",
+        "label"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "Hypothesis": {
+      "additionalProperties": false,
+      "properties": {
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "context_evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Context Evidence Ids",
+          "type": "array"
+        },
+        "contradicting": {
+          "items": {
+            "$ref": "#/$defs/SupportRef"
+          },
+          "title": "Contradicting",
+          "type": "array"
+        },
+        "hypothesis_id": {
+          "title": "Hypothesis Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "trend",
+            "association",
+            "anomaly"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "probability": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Probability"
+        },
+        "probability_method": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Probability Method"
+        },
+        "probability_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Probability Reason"
+        },
+        "review_date": {
+          "title": "Review Date",
+          "type": "string"
+        },
+        "statement": {
+          "maxLength": 400,
+          "title": "Statement",
+          "type": "string"
+        },
+        "status": {
+          "const": "unvalidated",
+          "title": "Status",
+          "type": "string"
+        },
+        "supporting": {
+          "items": {
+            "$ref": "#/$defs/SupportRef"
+          },
+          "title": "Supporting",
+          "type": "array"
+        },
+        "validation_criteria": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Validation Criteria",
+          "type": "array"
+        },
+        "variables": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Variables",
+          "type": "array"
+        }
+      },
+      "required": [
+        "hypothesis_id",
+        "kind",
+        "statement",
+        "supporting",
+        "contradicting",
+        "variables",
+        "assumptions",
+        "validation_criteria",
+        "context_evidence_ids",
+        "review_date",
+        "status"
+      ],
+      "title": "Hypothesis",
+      "type": "object"
+    },
+    "Interpretation": {
+      "additionalProperties": false,
+      "properties": {
+        "matched_entities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Matched Entities",
+          "type": "array"
+        },
+        "matched_tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Matched Tags",
+          "type": "array"
+        },
+        "method": {
+          "const": "rule-based keyword interpretation; no model",
+          "title": "Method",
+          "type": "string"
+        },
+        "since": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Since"
+        },
+        "terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Terms",
+          "type": "array"
+        },
+        "until": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Until"
+        }
+      },
+      "required": [
+        "terms",
+        "matched_entities",
+        "matched_tags",
+        "since",
+        "until",
+        "method"
+      ],
+      "title": "Interpretation",
+      "type": "object"
+    },
+    "MissingEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "item": {
+          "maxLength": 300,
+          "title": "Item",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "no_data",
+            "insufficient_data",
+            "gaps",
+            "conflicts",
+            "quarantined",
+            "access",
+            "category_empty",
+            "model",
+            "other"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "item"
+      ],
+      "title": "MissingEvidence",
+      "type": "object"
+    },
+    "ModelSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "label": {
+          "const": "model-written, unverified; not used for any statistic, hypothesis or conclusion",
+          "title": "Label",
+          "type": "string"
+        },
+        "model_id": {
+          "title": "Model Id",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 800,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "evidence_ids",
+        "model_id",
+        "label"
+      ],
+      "title": "ModelSummary",
+      "type": "object"
+    },
+    "StatResult": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "series_summary",
+            "correlation"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "method_version": {
+          "title": "Method Version",
+          "type": "string"
+        },
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        },
+        "result_hash": {
+          "title": "Result Hash",
+          "type": "string"
+        },
+        "stat_id": {
+          "title": "Stat Id",
+          "type": "string"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stat_id",
+        "subject",
+        "kind",
+        "evidence_ids",
+        "method_version",
+        "result",
+        "result_hash"
+      ],
+      "title": "StatResult",
+      "type": "object"
+    },
+    "SupportRef": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_id": {
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "note": {
+          "maxLength": 300,
+          "title": "Note",
+          "type": "string"
+        },
+        "stat_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Stat Id"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "stat_id",
+        "note"
+      ],
+      "title": "SupportRef",
+      "type": "object"
+    }
+  },
+  "$id": "https://patience.local/schemas/intel-report-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "collections": {
+      "items": {
+        "$ref": "#/$defs/Collection"
+      },
+      "title": "Collections",
+      "type": "array"
+    },
+    "conclusions": {
+      "items": {
+        "$ref": "#/$defs/Conclusion"
+      },
+      "title": "Conclusions",
+      "type": "array"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "created_by": {
+      "title": "Created By",
+      "type": "string"
+    },
+    "data_snapshot_hash": {
+      "title": "Data Snapshot Hash",
+      "type": "string"
+    },
+    "evidence": {
+      "items": {
+        "$ref": "#/$defs/Evidence"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "hypotheses": {
+      "items": {
+        "$ref": "#/$defs/Hypothesis"
+      },
+      "title": "Hypotheses",
+      "type": "array"
+    },
+    "interpretation": {
+      "$ref": "#/$defs/Interpretation"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "llm_used": {
+      "title": "Llm Used",
+      "type": "boolean"
+    },
+    "missing_evidence": {
+      "items": {
+        "$ref": "#/$defs/MissingEvidence"
+      },
+      "title": "Missing Evidence",
+      "type": "array"
+    },
+    "model_summary": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ModelSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "query_id": {
+      "title": "Query Id",
+      "type": "string"
+    },
+    "question": {
+      "title": "Question",
+      "type": "string"
+    },
+    "report_id": {
+      "title": "Report Id",
+      "type": "string"
+    },
+    "reproducibility_hash": {
+      "title": "Reproducibility Hash",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "intel-report-v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope_notice": {
+      "title": "Scope Notice",
+      "type": "string"
+    },
+    "statistics": {
+      "items": {
+        "$ref": "#/$defs/StatResult"
+      },
+      "title": "Statistics",
+      "type": "array"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "insufficient_evidence"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "report_id",
+    "query_id",
+    "question",
+    "status",
+    "interpretation",
+    "collections",
+    "evidence",
+    "statistics",
+    "hypotheses",
+    "missing_evidence",
+    "conclusions",
+    "limitations",
+    "scope_notice",
+    "data_snapshot_hash",
+    "reproducibility_hash",
+    "llm_used",
+    "model_summary",
+    "created_at",
+    "created_by"
+  ],
+  "title": "Report",
+  "type": "object"
+}

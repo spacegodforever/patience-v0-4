@@ -656,6 +656,19 @@ app.include_router(_make_dev_router(lambda: dev_gate(), require_caller, require_
                                     authority_factory=_dev_authority, admin_dep=require_admin))
 
 
+# Oracle Intelligence v0.1 (analysis only; own SQLite file; model off unless PATIENCE_ORACLE=ollama is configured)
+from oracle_intelligence.router import make_router as _make_intel_router
+from oracle_intelligence.store import default_store as _intel_store
+
+
+def _intel_model():
+    from dev_governance.oracle_advisor.model import oracle_model_from_env
+    return oracle_model_from_env()
+
+
+app.include_router(_make_intel_router(lambda: _intel_store(), require_caller, require_approver, model_factory=_intel_model))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host=os.environ.get("PATIENCE_API_HOST", "127.0.0.1"),

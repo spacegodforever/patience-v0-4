@@ -1,0 +1,4 @@
+SYNTHETIC EXAMPLE DOCUMENT - internal logistics memo (example only).
+
+Freight transit times for wafer shipments increased over the period. The logistics team recommends reviewing
+inventory buffers for lithography parts. This memo contains example text for testing the pipeline only.

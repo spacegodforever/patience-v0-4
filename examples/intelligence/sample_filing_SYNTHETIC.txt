@@ -1,0 +1,5 @@
+SYNTHETIC EXAMPLE DOCUMENT - not a real filing, not real company data.
+
+SYN-FAB Corp quarterly update (example). SYN-FAB reported higher wafer capacity utilization this quarter and
+said its supplier lead time for lithography equipment from SYN-EQP lengthened. Management noted that memory
+demand was uneven and that SYN-MEM inventory levels remain a watch item for the semiconductor supply chain.
