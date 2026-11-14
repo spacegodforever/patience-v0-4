@@ -98,6 +98,7 @@ class Policy:
         for extra_cat, cons, irr in (("budget_exceeded", .85, True), ("llm_disagreement", .75, False)):
             self.categories.setdefault(extra_cat, {"consequence": cons, "irreversible": irr, "phrases": [], "patterns": []})
         self.industries = {}
+        self.outbound = set(r.get("outbound_categories", ["communication", "mass_communication", "public_publishing"]))
         for name, spec in (r.get("industries") or {}).items():
             self.industries[name] = {
                 "detect": [tuple(stem(w) for w in tokens(k)) for k in spec.get("detect", [])],
@@ -306,7 +307,10 @@ def score_tool(tool: str, args: dict, policy: Optional[Policy] = None) -> dict:
     if cat == "communication" and usage.get("recipients", 0) >= p.mass:
         cat = "mass_communication"
     auto = spec.get("auto_allow") or {}
-    ok = bool(auto)
+    outbound = cat in p.outbound
+    ok = bool(auto) and not outbound   # outbound on the user's behalf never auto-allows
+    if outbound:
+        reasons.append(f"{tool} is outbound communication ({cat}): always needs approval")
     if "max_recipients" in auto:
         ok &= usage.get("recipients", 0) <= auto["max_recipients"]
         if not ok: reasons.append(f"{usage.get('recipients')} recipients > {auto['max_recipients']}")
