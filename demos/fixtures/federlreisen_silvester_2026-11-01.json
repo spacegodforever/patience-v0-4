@@ -1,0 +1,11 @@
+{
+  "source_url": "http://www.federlreisen.de/reisen/reisetyp/silvester/",
+  "fetched_at": "2026-11-01",
+  "supplied_by": "Helm (Chief of Staff agent); fixed snapshot, provenance only. The demo never contacts this site.",
+  "currency": "EUR",
+  "trips": [
+    {"id": "abano", "title": "Silvester in Abano Terme", "start": "2026-12-27", "end": "2027-01-03", "days": 8, "price_from": 1169},
+    {"id": "kaernten", "title": "Jahreswechsel in Kärnten", "start": "2026-12-29", "end": "2027-01-02", "days": 5, "price_from": 715},
+    {"id": "heinzhof", "title": "Jahreswechsel in der Waldschänke Heinzhof", "start": "2026-12-31", "end": "2026-12-31", "days": 1, "price_from": 99}
+  ]
+}
