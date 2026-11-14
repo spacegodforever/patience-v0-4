@@ -36,8 +36,9 @@ def test_requires_action_or_tool(client):
     assert client.post("/v1/check", json={"requester": "x"}).status_code == 422
 
 
-def test_small_email_allowed_big_email_blocked(client):
-    assert chk(client, tool="send_email", args={"recipients": ["a@x.com", "b@x.com"]})["decision"] == "allow"
+def test_small_email_needs_approval_big_email_mass(client):
+    # outbound communication on the user's behalf never auto-allows (fix/outbound-requires-approval)
+    assert chk(client, tool="send_email", args={"recipients": ["a@x.com", "b@x.com"]})["decision"] == "needs_approval"
     r = chk(client, tool="send_email", args={"recipients": [f"u{i}@x.com" for i in range(25)]})
     assert r["decision"] == "needs_approval" and "mass_communication" in r["risk_categories"]
     assert r["irreversible"] is True
@@ -89,10 +90,11 @@ def test_split_refunds_hit_daily_budget(client, keys):
     assert chk(client, B, tool="refund", args={"amount": 200})["decision"] == "allow"
 
 
-def test_split_messages_hit_hourly_budget(client, keys):
+def test_split_messages_never_auto_allow(client, keys):
+    # previously 5 x 9 recipients auto-allowed until the hourly budget; outbound now always needs approval
     batch = {"recipients": [f"u{i}@x.com" for i in range(9)]}
     ds = [chk(client, keys["m"], tool="send_email", args=batch)["decision"] for _ in range(6)]
-    assert ds[:5] == ["allow"] * 5 and ds[5] == "needs_approval"   # 45 ok, 54 > 50
+    assert "allow" not in ds and ds[0] == "needs_approval"   # repeats of a pending request may return "defer"
 
 
 def test_window_expiry(client, keys, monkeypatch):
