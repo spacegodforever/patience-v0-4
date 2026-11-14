@@ -9,3 +9,4 @@ agents.yaml
 approvers.yaml
 patience_audit.jsonl*
 policy.yaml
+.patience_admin_password

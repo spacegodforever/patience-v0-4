@@ -33,3 +33,7 @@ patience_dev_gate.db
 # Execution gateway v0: signing keys are secrets
 *.permit_key
 *.key
+
+# Local installer backups and bootstrap secrets
+.patience_admin_password
+*.bak-*

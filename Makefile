@@ -1,8 +1,10 @@
 PY ?= python3
-.PHONY: install init run api dashboard worker mcp test eval verify-audit docker clean
+.PHONY: install install-local init run api dashboard worker mcp test eval verify-audit docker clean
 
 install:
 	$(PY) -m pip install -r requirements.txt
+install-local:
+	$(PY) tools/install.py
 init:
 	$(PY) patience_cli.py init --pin --agent my-agent
 api:

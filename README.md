@@ -13,6 +13,15 @@ make init        # = python patience_cli.py init --pin --agent my-agent
 make run         # API :8765, worker, dashboard :8501 (all on 127.0.0.1)
 ```
 
+Or from a clone, run the one-command local installer (macOS, Linux, or Windows PowerShell):
+
+```bash
+./install.sh          # macOS / Linux
+# .\install.ps1      # Windows PowerShell
+```
+
+See [docs/INSTALL.md](docs/INSTALL.md). This is a local development install; it is not signed or packaged.
+
 Open http://127.0.0.1:8501 and log in as your admin. Then ask PATIENCE as the agent:
 
 ```bash
