@@ -112,10 +112,12 @@ def test_permit_signature_tamper_is_detected():
     verifier.verify(issued["permit"], agent="agent-example", action=ACTION, expected_hash=ph)
 
     tag, kid, claims_b64, sig_b64 = issued["permit"].split(".")
-    # Flip the last character of the signature while staying in the base64url alphabet.
-    last = sig_b64[-1]
-    flipped_last = "A" if last != "A" else "B"
-    tampered = f"{tag}.{kid}.{claims_b64}.{sig_b64[:-1]}{flipped_last}"
+    # Flip an early base64url character. The last character often only carries
+    # padding bits (Ed25519 signatures are 64 bytes), so changing it can leave
+    # the decoded signature unchanged and the test would flake.
+    first = sig_b64[0]
+    flipped_first = "A" if first != "A" else "B"
+    tampered = f"{tag}.{kid}.{claims_b64}.{flipped_first}{sig_b64[1:]}"
     with pytest.raises(PermitRejected) as err:
         verifier.verify(tampered, agent="agent-example", action=ACTION, expected_hash=ph)
     assert err.value.code == "bad_signature"
