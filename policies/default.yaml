@@ -106,6 +106,11 @@ categories:
     irreversible: true
     keywords: [contract, agreement, terms, nda, lease, settlement, sign, "accept terms", terminate,
       termination, lawsuit, court, motion, counsel, trademark, patent, "demand letter", legal, vendor, agree]
+  outbound_report:
+    # forms/reports submitted to third parties in the user's name (abuse reports, web forms)
+    consequence: 0.8
+    irreversible: true
+    keywords: []
   injection:
     consequence: 0.95
     irreversible: true
@@ -140,12 +145,27 @@ industries:
 # auto_allow: the call is allowed on its own only if every condition holds;
 # rolling budgets below still apply to allowed calls.
 read_only_tool_prefixes: [get_, list_, search_, read_, fetch_, lookup_, summarize, draft_, preview_]
+# Outbound communication on the user's behalf ALWAYS needs approval, whatever
+# the size. Tools in these categories never auto-allow: any auto_allow on them is
+# ignored (fail closed). This is a category rule, not name-matching. Unknown
+# tools also fail closed via unknown_side_effect.
+outbound_categories: [communication, mass_communication, public_publishing, outbound_report]
+
 tools:
   send_email:
     category: communication            # becomes mass_communication at >= thresholds.mass_recipients
     recipients_arg: recipients         # list of addresses or an integer count
-    auto_allow: {max_recipients: 9}
-  send_message: {category: communication, recipients_arg: recipients, auto_allow: {max_recipients: 9}}
+  send_message: {category: communication, recipients_arg: recipients}
+  send_sms: {category: communication, recipients_arg: recipients}
+  send_dm: {category: communication, recipients_arg: recipients}
+  reply_email: {category: communication, recipients_arg: recipients}
+  forward_email: {category: communication, recipients_arg: recipients}
+  post_message: {category: communication}
+  slack_post_message: {category: communication}
+  post: {category: public_publishing}
+  submit_web_form: {category: outbound_report}
+  submit_abuse_report: {category: outbound_report}
+  send_abuse_report_email: {category: outbound_report, recipients_arg: to}
   refund:
     category: money
     amount_arg: amount                 # per refund
