@@ -40,9 +40,14 @@ audit event. Now:
 
 If the audit write fails, `DevGate._audit_required` turns it into `GateError(503)` and the attempt is
 refused (fail closed); request state is unchanged. Response bodies and status codes for the normal
-paths are unchanged. Other refusals that were already audited are untouched. Still unaudited: execute
-calls that fail with 409 for "already used" or "not executable" states, and 501 (no adapter); listed
-under remaining work.
+paths are unchanged. Other refusals that were already audited are untouched.
+
+Follow-up (`feat/audit-refused-attempts`): the remaining execute refusals (409 already used, not
+executable, permit-only, expired / already expired, CAS contention; 501 no adapter) now write
+`dev.execute.refused`, and approve-path 409s (expired, not pending, duplicate approver, contention)
+write `dev.approve.refused`, each with a `reason` code and `http_status`, fail closed the same way. Both
+events count as refusals in `decision-v1` and in audit reports (`http_status` and `request_status` are
+on the report allow-list). Tests: `tests/test_audit_refused_attempts.py`.
 
 ## 3. Audit reports: `tools/audit_report.py`
 
@@ -124,7 +129,7 @@ chain stops generation (exit 1, nothing written).
 
 ## Remaining work
 
-Audit 409/501 execute refusals; per-agent read authorization on the report endpoint (today any named
+Audit the `issue_permit` and `deny` 409 refusals; per-agent read authorization on the report endpoint (today any named
 approver can read any agent's report); index/streaming read of large logs; signed reports or external
 head pinning; report JSON Schema; Oracle step 2 (context builder, `oracle_records`, gate hook); evaluation
 set; planning; approval-fatigue features; simulated device.

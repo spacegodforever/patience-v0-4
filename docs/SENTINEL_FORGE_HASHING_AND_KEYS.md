@@ -426,7 +426,7 @@ key compromise without a rotation/revocation procedure (none is implemented).
 | Audit line edited, deleted, inserted, reordered | Chain `prev` + record `hash` + seq | Yes, `audit.verify` / `verify_audit.py` | Rewriting the log *and* `.head` together forges a consistent chain |
 | Audit tail truncated | `.head` (and optional `--expect-head`) | Yes, if `.head` or a pin still has the old hash | No automatic external anchor; `.head` write is not fsynced |
 | Report file corrupted | `report_hash` | Accidental edits of the report, yes | Not a signature; consistent rewrite of log + head + report is undetected without a pin |
-| Audit unavailable on a denied or unapproved execute *attempt* | `DevGate._audit_required` | Attempt refused 503 (fail closed) | Only those two events use this helper; see gaps |
+| Audit unavailable on a refused execute or approve *attempt* | `DevGate._audit_required` / `DevGate._refuse` | Attempt refused 503 (fail closed) | Covers denied/unapproved execute attempts and the 409/501 execute and approve refusals; not `issue_permit`, `deny`, or ordinary `audit.append` refusals; see gaps |
 | Missing `cryptography` or bad permit key file | `PermitError`, no HMAC fallback | Yes, no permit issued | Operator must fix the key or dependency |
 
 ---
@@ -458,21 +458,21 @@ code fact wins.
    write raises, a stored request can exist without a matching `dev.proposed` record, and a failed
    audit does not roll the insert back.
 
-5. **Several 409 and 501 refusals are not audited.** `_audit_required` is used only for
-   `dev.execute.denied_attempt` (denied request, 403) and `dev.execute.unapproved_attempt`
-   (still pending, 202). The following execute-path refusals have **no** audit event on the
-   refusal itself:
-   - 409 "this approval was already used" (`status` in `executed` / `executing`)
-   - 409 "request is not executable …"
-   - 409 "… is executed only by the execution gateway; request a permit"
-   - 501 "no adapter configured for …"
-   - 409 from `_update` after compare-and-swap contention ("request is under heavy contention; retry")
-   Payload mismatch *is* audited (`dev.payload_mismatch`, 409). A request that *becomes* expired
-   inside `_expire_if_due` is audited (`dev.expired`, and `dev.expiry.tampered` when applicable),
-   but an execute call against a request that was *already* expired does not write a separate
-   execute-attempt event. Approve-path 409s (not pending, duplicate approver) are likewise unaudited.
-   `docs/structured-outputs-audit-reports.md` already lists "audit 409/501 execute refusals" as
-   remaining work.
+5. **Execute and approve refusals: closed on `feat/audit-refused-attempts`.** `_audit_required`
+   covers `dev.execute.denied_attempt` (403) and `dev.execute.unapproved_attempt` (202). The new
+   helper `DevGate._refuse` now writes, fail closed, one `dev.execute.refused` event (with a
+   `reason` code, `http_status`, request id and payload hash) for every execute refusal that used
+   to leave no record: `already_used` (status `executed` / `executing`), `not_executable`,
+   `permit_only` (permit-gated action sent to execute), `no_adapter` (501), `contention` (CAS gave
+   up, 409), and `expired` / `already_expired` (expired on this call vs. before it; `dev.expired` is
+   still written once for the transition). Approve-path 409s write `dev.approve.refused` with
+   `expired`, `already_expired`, `not_pending` or `duplicate_approver` (and `contention`). If the
+   audit write fails the caller gets 503 and the request is unchanged. Status codes and messages of
+   the refusals are unchanged. Tested in `tests/test_audit_refused_attempts.py`.
+   Still not audited on the refusal itself: the `issue_permit` 409s (already used, not approved,
+   expired), `deny` on a non-pending request (409), and the plain 404 for an unknown request id.
+   Refusals that already used ordinary `audit.append` (for example `dev.payload_mismatch`,
+   `dev.execute.forbidden`) still write best effort, not fail closed.
 
 6. **`.head` is not fsynced.** The log line is `flush` + `os.fsync`; `_head(p).write_text(...)` is
    not. A crash in that window can make `verify` report truncation of an otherwise intact log.
@@ -501,8 +501,8 @@ be implemented without a separate, approved change.
   key is removed; a planned rollover of `PATIENCE_CLAIM_SECRET` / the claim key file; a revocation
   list or kill step for a compromised `kid`. Until then, treat key compromise as "minting power
   for the current secret."
-- Audit the remaining 409/501 execute refusals, fail closed if that audit write fails, and
-  consider the same for already-expired execute attempts.
+- Extend the fail-closed refusal audit (`DevGate._refuse`) to the `issue_permit` and `deny`
+  409s, and move the older best-effort refusal events onto it.
 - Write `dev.proposed` (fail closed) before or atomically with the store insert, or roll back the
   insert if the audit write fails.
 - `fsync` the `.head` file after writing it, still under the same lock.

@@ -55,7 +55,7 @@ ALLOW_KEYS = frozenset({
     "quote_unverified", "context_sources", "latency_ms", "schema_version", "oracle_version", "limits_version",
     "advisory_only", "code", "risk_floor_applied", "amount_usd", "currency", "owners", "reasons", "reason", "error",
     "note", "why", "violations", "prior_reason", "was_frozen", "channel", "scope", "invoice_id", "from_tier",
-    "to_tier", "min_age_seconds", "flagged", "approved"})
+    "to_tier", "min_age_seconds", "flagged", "approved", "http_status", "request_status"})
 # free-text keys additionally pass through the value scrubber
 SCRUB_RES = [
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=\-]{8,}"),
@@ -125,7 +125,8 @@ CATEGORY = {
 }
 REFUSED = {"dev.destructive.refused", "dev.propose.rejected", "dev.self_approval_rejected", "dev.self_resolution_rejected",
            "dev.execute.forbidden", "dev.permit.forbidden", "dev.authority.refused", "dev.permit.refused",
-           "dev.payload_mismatch", "dev.kill_switch.blocked", "dev.breaker.held", "dev.expiry.tampered"}
+           "dev.payload_mismatch", "dev.kill_switch.blocked", "dev.breaker.held", "dev.expiry.tampered",
+           "dev.execute.refused", "dev.approve.refused"}
 
 
 def category(event: str) -> str:
