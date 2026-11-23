@@ -32,6 +32,11 @@ class GateError(Exception):
         self.status, self.message = status, message
 
 
+class ContentionError(GateError):
+    """The optimistic compare-and-swap loop gave up (409). A GateError subclass, so existing callers
+    that catch GateError are unaffected; execute/approve catch it to audit the refusal."""
+
+
 def canonical_json(obj: Any) -> str:
     """Strict canonical JSON (RT-06): no default=str, no NaN/Infinity, string keys only."""
     def check(o):
@@ -96,6 +101,12 @@ class DevGate:
             audit.append(event, actor, **data)
         except Exception:
             raise GateError(503, "audit log unavailable; refused (fail closed)")
+
+    def _refuse(self, event: str, actor: Optional[str], status: int, message: str, reason: str, **data):
+        """Record a refusal, then raise it. The audit write is required: if it fails the caller gets
+        503 instead of the original refusal (fail closed) and nothing about the request changes."""
+        self._audit_required(event, actor, reason=reason, http_status=status, **data)
+        raise GateError(status, message)
 
     def _trip_check(self, agent: str, kind: str) -> None:
         reason = self.breaker.record(agent, kind)
@@ -221,7 +232,7 @@ class DevGate:
             changed, value = mutate(req)
             if not changed or self.store.cas(req):
                 return req, changed, value
-        raise GateError(409, "request is under heavy contention; retry")
+        raise ContentionError(409, "request is under heavy contention; retry")
 
     @staticmethod
     def _expiry_sig(req: dict) -> str:
@@ -254,13 +265,16 @@ class DevGate:
 
     # 3. approval
     def approve(self, rid: str, approver: str, reason: str = "") -> dict:
-        self._halt_checks(self._get(rid)["proposer"], "approve")
+        before = self._get(rid)
+        self._halt_checks(before["proposer"], "approve")
         if self._expire_if_due(rid)["status"] == "expired":
-            raise GateError(409, "approval window expired; submit a new proposal")
+            self._refuse("dev.approve.refused", approver, 409, "approval window expired; submit a new proposal",
+                         "already_expired" if before["status"] == "expired" else "expired", request_id=rid)
 
         def m(req):
             if req["status"] != "pending":
-                raise GateError(409, f"request is {req['status']}, not pending")
+                self._refuse("dev.approve.refused", approver, 409, f"request is {req['status']}, not pending",
+                             "not_pending", request_id=rid, request_status=req["status"])
             if not approver or approver == req["proposer"]:
                 audit.append("dev.self_approval_rejected", approver, request_id=rid, reason="is_proposer")
                 raise GateError(403, "the proposer cannot approve their own request")
@@ -268,12 +282,17 @@ class DevGate:
                 audit.append("dev.self_approval_rejected", approver, request_id=rid, reason="owner_of_proposer")
                 raise GateError(403, "an owner of the proposing agent cannot approve its request")
             if approver in req["approvals"]:
-                raise GateError(409, "this approver already approved; a different approver is required")
+                self._refuse("dev.approve.refused", approver, 409,
+                             "this approver already approved; a different approver is required",
+                             "duplicate_approver", request_id=rid)
             req["approvals"].append(approver)
             if len(req["approvals"]) >= req["approvals_required"]:
                 req["status"] = "approved"
             return True, None
-        req, _, _ = self._update(rid, m)
+        try:
+            req, _, _ = self._update(rid, m)
+        except ContentionError as e:
+            self._refuse("dev.approve.refused", approver, e.status, e.message, "contention", request_id=rid)
         audit.append("dev.approved", approver, request_id=rid, payload_hash=req["payload_hash"],
                      count=len(req["approvals"]), required=req["approvals_required"], reason=reason)
         return self._public(req)
@@ -300,7 +319,9 @@ class DevGate:
             raise GateError(409, "action/payload differ from the approved request; a new approval is required")
         self._halt_checks(req["proposer"], "execute")
         if req["action"] in _PERMIT_ACTIONS:
-            raise GateError(409, f"{req['action']} is executed only by the execution gateway; request a permit")
+            self._refuse("dev.execute.refused", caller, 409,
+                         f"{req['action']} is executed only by the execution gateway; request a permit",
+                         "permit_only", request_id=rid, payload_hash=h)
         if req["action"] == "test.run_isolated":
             if self.authority is None:
                 raise GateError(403, "a human-granted isolated test capability is required")
@@ -318,7 +339,11 @@ class DevGate:
             audit.append("dev.execute.forbidden", caller, request_id=rid, proposer=req["proposer"])
             raise GateError(403, "only the proposer (or its owner) may execute this request")
         if self._expire_if_due(rid)["status"] == "expired":
-            raise GateError(409, "approval window expired; submit a new proposal")
+            # "expired": it expired on this call (dev.expired is also written); "already_expired": it was
+            # expired before this call, which previously left no execute-attempt record at all
+            self._refuse("dev.execute.refused", caller, 409, "approval window expired; submit a new proposal",
+                         "already_expired" if req["status"] == "expired" else "expired",
+                         request_id=rid, payload_hash=h)
 
         def claim(req):
             s = req["status"]
@@ -328,21 +353,28 @@ class DevGate:
                 self._audit_required("dev.execute.denied_attempt", caller, request_id=rid, payload_hash=h)
                 raise GateError(403, "request was denied")
             if s in ("executed", "executing"):
-                raise GateError(409, "this approval was already used")
+                self._refuse("dev.execute.refused", caller, 409, "this approval was already used",
+                             "already_used", request_id=rid, payload_hash=h, request_status=s)
             if s == "pending":
                 return False, "pending"
             # RT-12: positive allowlist + approval count re-check
             ok = (s == "allowed" and req["approvals_required"] == 0) or \
                  (s == "approved" and len(set(req["approvals"])) >= req["approvals_required"])
             if not ok:
-                raise GateError(409, f"request is not executable (status {s!r})")
+                self._refuse("dev.execute.refused", caller, 409, f"request is not executable (status {s!r})",
+                             "not_executable", request_id=rid, payload_hash=h, request_status=str(s)[:40])
             if self.adapters.get(req["action"]) is None:
-                raise GateError(501, f"no adapter configured for {req['action']!r}")
+                self._refuse("dev.execute.refused", caller, 501, f"no adapter configured for {req['action']!r}",
+                             "no_adapter", request_id=rid, payload_hash=h, action=req["action"])
             req["claimed_from"] = s
             req["claimed_at"] = self.clock()
             req["status"] = "executing"
             return True, "claimed"
-        req, _, what = self._update(rid, claim)
+        try:
+            req, _, what = self._update(rid, claim)
+        except ContentionError as e:
+            self._refuse("dev.execute.refused", caller, e.status, e.message, "contention",
+                         request_id=rid, payload_hash=h)
         if what == "pending":
             self._audit_required("dev.execute.unapproved_attempt", caller, request_id=rid, payload_hash=h,
                                  approvals=len(req["approvals"]), required=req["approvals_required"])

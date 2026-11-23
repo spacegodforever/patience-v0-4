@@ -31,7 +31,9 @@ language ambiguity analyzer.
    approvals returns **202** (`pending_approval`). Each approval executes at most once.
 5. **Audit** – every step (`dev.proposed`, `dev.approved`, `dev.self_approval_rejected`,
    `dev.payload_mismatch`, `dev.expired`, `dev.execute.claimed`, `dev.executed`,
-   `dev.execute.failed`, `dev.denied`) is written to the existing `audit.py` log, which is
+   `dev.execute.failed`, `dev.denied`, and the refusals `dev.execute.refused` /
+   `dev.approve.refused`, which carry a `reason` code and fail closed with 503 if the log cannot be
+   written) is written to the existing `audit.py` log, which is
    **append-only and tamper-evident** (SHA-256 hash chain; `python audit.py verify`). It is not
    immutable: someone who can rewrite both the log and its head file can still alter it; ship
    it off-box to detect that.

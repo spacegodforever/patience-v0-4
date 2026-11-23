@@ -19,7 +19,8 @@ _REFUSAL_EVENTS = {
     "dev.destructive.refused", "dev.propose.rejected", "dev.self_approval_rejected", "dev.self_resolution_rejected",
     "dev.execute.forbidden", "dev.permit.forbidden", "dev.authority.refused", "dev.permit.refused",
     "dev.payload_mismatch", "dev.kill_switch.blocked", "dev.breaker.held", "dev.denied",
-    "dev.execute.denied_attempt", "dev.execute.unapproved_attempt", "dev.expiry.tampered", "dev.expired"}
+    "dev.execute.denied_attempt", "dev.execute.unapproved_attempt", "dev.expiry.tampered", "dev.expired",
+    "dev.execute.refused", "dev.approve.refused"}
 _SAFE_REASON = re.compile(r"^[A-Za-z0-9_.:\- ]{1,120}$")
 
 
